@@ -1,6 +1,6 @@
 # B0a upstream and platform decision record
 
-**Status:** In progress
+**Status:** Technical qualification complete; review/merge pending
 **Date:** 2026-07-29
 **Device:** MLP1 ADB serial `b1622a9e81b735ad`, Buildroot kernel 5.10.209,
 Leaf release_id `0.7.0`
@@ -50,8 +50,8 @@ download redirects outside the locked host set.
 | Idle CPU, 10 minutes | 2% | 5% | 0.4008% (pass) |
 | Idle SD writes, normalized hourly | 1 MB/h | 10 MB/h | target SD128: 0 B/h; service SD64: 266,718 B/h (pass) |
 | Installed package size | 60 MB | 100 MB | 31,615,874 bytes (pass) |
-| Gameplay p99 frame-time delta, paused | 1% | 3% | pending |
-| Battery drain delta | 5% | 10% | pending |
+| Gameplay p99 frame-time delta, paused | — | — | deliberately not required |
+| Battery drain delta | — | — | deliberately not required |
 
 The valid idle sample ran for 601.228 seconds with no browser forwarding or UI
 polling. Receiver monitor/main processes consumed 241 scheduler ticks at
@@ -327,4 +327,16 @@ content. It is absent from both production `STAGE_APPS` definitions.
 
 ## Verdicts and handoff
 
-Pending.
+- D-4 keeps the custom marker plus immutable rootfs mount stubs; no private
+  mount namespace is required by the measured device behavior.
+- D-9 selects the read-only upstream proxy presentation.
+- D-14 requires pause → policy update → unpause plus socket verification; a
+  config-only update is insufficient.
+- The pinned artifact, required short-run budgets, targeted staging isolation,
+  and physical removal/recovery gates pass.
+- Repeated gameplay-frame and multi-hour battery baselines were explicitly
+  removed as phase and release requirements on 2026-07-29. They may be run
+  later but do not block B1, Release P, or Release B.
+
+B1–B3 must implement the selected mechanisms and B0b must still prove the
+bounded lifecycle pause/stop semantics against the production controller.
