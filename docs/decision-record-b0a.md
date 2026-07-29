@@ -49,7 +49,7 @@ download redirects outside the locked host set.
 | Idle RSS | 80 MB | 120 MB | 104,300 KiB end/max observed (acceptable; misses preferred budget) |
 | Idle CPU, 10 minutes | 2% | 5% | 0.4008% (pass) |
 | Idle SD writes, normalized hourly | 1 MB/h | 10 MB/h | target SD128: 0 B/h; service SD64: 266,718 B/h (pass) |
-| Installed package size | 60 MB | 100 MB | 31,615,874 bytes (pass) |
+| Installed package size | 60 MB | 100 MB | 31,615,873 bytes (pass) |
 | Gameplay p99 frame-time delta, paused | — | — | deliberately not required |
 | Battery drain delta | — | — | deliberately not required |
 
@@ -314,10 +314,15 @@ make stage-app APP=Leaf-Syncthing-Pak DEVICE=mlp1 \
   REMOTE_SDCARD_PATH=/media/sdcard1
 ```
 
-The target was intentionally explicit because both cards were mounted. Leaf
-deployed six files and exactly 31,615,874 bytes to
-`/media/sdcard1/Apps/mlp1/Syncthing.pak`; the staged binary, gateway, launcher,
-and manifest hashes matched the local package.
+The target was intentionally explicit because both cards were mounted. The
+original qualification deployed six files and 31,615,874 bytes to
+`/media/sdcard1/Apps/mlp1/Syncthing.pak`; its hashes matched the then-current
+working tree. Publishing normalized one trailing newline in the packaged lock
+file, making the reviewable package one byte smaller without changing either
+binary. A later mount assignment put the same marked 64 GB card at
+`/mnt/sdcard`; an exact post-publication targeted-stage rerun deployed
+31,615,873 bytes and produced combined host/device manifest SHA-256
+`7893a53488abb0da51a408805ec7176a33c75a53506afdd18fa553ba98cbd971`.
 
 On Leaf branch `agent/b0a-syncthing-targeted-stage`, the app is classified as
 Pak Rat-owned for explicit `stage-app` use. The strengthened policy smoke test
