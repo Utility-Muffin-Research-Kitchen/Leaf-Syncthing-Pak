@@ -1,6 +1,8 @@
 # B1 controller qualification record
 
-**Status:** In progress; controller/upstream, card, migration, folder-conflict, guardian, and write-boundary gates passed
+**Status:** In progress; controller/upstream, card, migration, folder-conflict,
+guardian, write-boundary, package, and software-audit gates passed; physical
+removal remains
 
 **Date:** 2026-08-08
 
@@ -20,12 +22,24 @@
 
 **Write-boundary qualification commit:** `a263145a3403d7acf2cf401505b58286aff58d0d`
 
+**B1 package commit:** `28fde1d048ef2280df42979f95213e242041ed59`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
 **Contract pin:** `e9b00c5e357c32e5d4e055d1d10d5e7b6fff944c`
 
 This is the early production-shaped B1 measurement required before card and
 folder work expands the controller. It is not the final B1 completion record.
+
+## B1 development package
+
+`make package-mlp1` now builds the cgo-disabled controller rather than the B0a
+gateway spike. The `0.0.0-b1` manifest carries the normative SVC-1 service and
+retained-state declarations, and its service path resolves to the packaged
+`bin/leaf-syncthing`. The deterministic ZIP contains exactly six regular,
+FAT-safe files: controller, pinned upstream, foreground development launcher,
+manifest, upstream license, and upstream lock/evidence. The B0a gateway remains
+source-only qualification evidence and is absent from the package.
 
 ## Implemented startup boundary
 
@@ -152,6 +166,11 @@ verified that no fixture process or mount remained.
   through `config.xml.tmp`/`.bak`, restored the original marker hash, removed
   both migration staging directories, and only then spawned upstream. The
   second Stop again proved absence.
+- With the service stopped, the fixture replaced the complete pak directory,
+  deleted the derived upstream data/index directory, restarted Jawaka for fresh
+  manifest discovery, and ran the reinstalled service. Certificate, key,
+  generation marker, and card-id hashes remained byte-identical; the
+  certificate-derived device id therefore remained stable as the index rebuilt.
 - The same restart carried an injected, initially unpaused, derivation-correct
   Leaf Saves send-only binding. Startup forced it paused through the offline
   transaction before spawn and reported only the `first-sync` reason. A third
@@ -220,7 +239,24 @@ capacity. The earlier B0a 104,300 KiB upstream result included configured
 folders/peer activity and is not a like-for-like controller-overhead number;
 the measured resident controller increment here is about 6.9 MiB.
 
+## Software-only closeout audits
+
+- `make test`, `go test -race ./...`, `go vet ./...`, standalone C fixture
+  compilation, and shell syntax pass.
+- The packaged archive contains no symlink, absolute path, traversal, or file
+  outside its one `Syncthing.pak/` root; its manifest was freshly discovered
+  and run by real Jawaka on the MLP1.
+- A tracked-production-source scan found no private key, bearer/basic
+  authorization header, or literal API-key secret class.
+- Leaf's existing optional-package policy smoke passes and keeps Syncthing out
+  of default `STAGE_APPS`, required bootstrap repos, and `managed_apps`.
+  The actual August 7 Release A SD ZIP also contains no Syncthing pak, path, or
+  manifest entry.
+- The repository does not yet declare a license for the UMRK controller code;
+  selecting that license is a maintainer decision before B1 can be finalized.
+
 ## Remaining B1 work
 
+- select and package the UMRK controller license;
 - repeat the physical scan/receive/rename/versioning removal matrix through the
-  real controller, then run final footprint, secret, and staging audits.
+  real controller, then record the final configured-folder footprint.
