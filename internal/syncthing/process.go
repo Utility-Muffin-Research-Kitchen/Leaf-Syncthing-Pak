@@ -52,6 +52,34 @@ type Process struct {
 	groupID int
 }
 
+type gatewayTransport struct {
+	base   http.RoundTripper
+	apiKey string
+}
+
+func (transport gatewayTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.Header = request.Header.Clone()
+	clone.Header.Del("Authorization")
+	clone.Header.Del("X-API-Key")
+	clone.Header.Set("X-API-Key", transport.apiKey)
+	return transport.base.RoundTrip(clone)
+}
+
+// GatewayTransport keeps the private API key inside the controller-owned
+// upstream process while giving the read-only gateway an authenticated Unix
+// transport. Client credentials are always removed before key injection.
+func (process *Process) GatewayTransport() http.RoundTripper {
+	if process == nil || process.client == nil || process.apiKey == "" {
+		return nil
+	}
+	base := process.client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return gatewayTransport{base: base, apiKey: process.apiKey}
+}
+
 func StartProcess(ctx context.Context, options ProcessOptions) (*Process, error) {
 	if err := options.validate(); err != nil {
 		return nil, err

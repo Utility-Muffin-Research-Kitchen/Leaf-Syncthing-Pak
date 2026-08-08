@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 7 {
-		t.Fatalf("checked %d fixtures, want 7", checked)
+	if checked != 9 {
+		t.Fatalf("checked %d fixtures, want 9", checked)
 	}
 }
 
@@ -185,6 +185,31 @@ func TestNetworkProfileOperationRequiresConfirmation(t *testing.T) {
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 			t.Fatalf("unsafe network response = %+v", response)
 		}
+	}
+}
+
+func TestGatewayOperationsSeparatePairingFromConfirmedActions(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		GatewayAction: func(operation string) (Status, *ProtocolError) {
+			called = operation
+			status := fixtureStatus()
+			status.Gateway = &GatewayStatus{Open: true, URL: "https://192.0.2.1:8384/", Fingerprint: "AA:BB"}
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.open","args":{}}`))
+	if !response.OK || called != OperationGatewayOpen {
+		t.Fatalf("gateway open = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.revoke-all","args":{"confirmed":false}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("unconfirmed revoke = %+v", response)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.revoke-all","args":{"confirmed":true}}`))
+	if !response.OK || called != OperationGatewayRevoke {
+		t.Fatalf("confirmed revoke = %+v, called=%q", response, called)
 	}
 }
 

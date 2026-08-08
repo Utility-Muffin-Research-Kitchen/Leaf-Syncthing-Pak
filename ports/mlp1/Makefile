@@ -13,13 +13,13 @@ UMRK_MLP1_PROFILE_CFLAGS ?= -O2 -mcpu=cortex-a55 -mtune=cortex-a55 -ffunction-se
 UMRK_MLP1_PROFILE_LDFLAGS ?= -Wl,--gc-sections
 endif
 
-SRC := src/main.c src/framed_socket.c src/ui_control.c src/ctl1.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
+SRC := src/main.c src/framed_socket.c src/ui_control.c src/ctl1.c third_party/qrcodegen.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
 HDR := $(wildcard include/*.h) $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h
 PKG_CONFIG ?= pkg-config
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf SDL2_image)
 SDL_LIBS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf SDL2_image)
 CFLAGS := -std=gnu11 $(UMRK_MLP1_PROFILE_CFLAGS) -Wall -Wextra -Werror \
-	-DPLATFORM_MLP1 -Iinclude -I$(CATASTROPHE_DIR)/include -I$(CATASTROPHE_DIR)/include/cjson $(SDL_CFLAGS)
+	-DPLATFORM_MLP1 -Iinclude -Ithird_party -I$(CATASTROPHE_DIR)/include -I$(CATASTROPHE_DIR)/include/cjson $(SDL_CFLAGS)
 LDFLAGS := $(UMRK_MLP1_PROFILE_LDFLAGS) $(SDL_LIBS) -lm
 
 .PHONY: all clean

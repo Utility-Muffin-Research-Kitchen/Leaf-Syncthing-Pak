@@ -48,6 +48,14 @@ int main(void) {
                                 error, sizeof(error)) == -1);
     free(payload);
 
+    payload = read_fixture("gateway-open-response.json", &size);
+    assert(ls_ui_parse_response(payload, size, "fixture-gateway", &status,
+                                error, sizeof(error)) == 0);
+    assert(status.gateway_present && status.gateway_open && status.gateway_pairing);
+    assert(strcmp(status.gateway_pin, "1234") == 0);
+    assert(status.gateway_trusted_browsers == 1);
+    free(payload);
+
     payload = read_fixture("network-profile-set-response.json", &size);
     assert(ls_ui_parse_response(payload, size, "fixture-network", &status,
                                 error, sizeof(error)) == 0);
@@ -62,6 +70,6 @@ int main(void) {
                                 error, sizeof(error)) == 1);
     assert(strcmp(error, "unsupported UI control operation") == 0);
     free(payload);
-    puts("PASS ui-control-v1 C semantic client (3 fixtures)");
+    puts("PASS ui-control-v1 C semantic client (4 fixtures)");
     return 0;
 }

@@ -62,6 +62,16 @@ typedef struct {
     char allowed_networks[LS_UI_MAX_NETWORKS][64];
     int allowed_network_count;
     bool network_route_changed;
+    bool gateway_present;
+    bool gateway_open;
+    bool gateway_pairing;
+    char gateway_url[256];
+    char gateway_pin[8];
+    char gateway_qr_url[512];
+    char gateway_offer_expires[64];
+    char gateway_fingerprint[128];
+    int gateway_trusted_browsers;
+    char gateway_extension_expires[64];
     ls_ui_card cards[LS_UI_MAX_CARDS];
     int card_count;
     ls_ui_folder folders[LS_UI_MAX_FOLDERS];
@@ -86,6 +96,12 @@ int ls_ui_network_profile_set(const char *socket_path,
                               ls_ui_status *status,
                               char *error,
                               size_t error_size);
+int ls_ui_gateway_action(const char *socket_path,
+                         const char *operation,
+                         bool confirmed,
+                         ls_ui_status *status,
+                         char *error,
+                         size_t error_size);
 int ls_ui_parse_response(const char *payload,
                          size_t payload_size,
                          const char *request_id,

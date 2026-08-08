@@ -28,6 +28,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *game;
     const cJSON *recovery;
     const cJSON *network;
+    const cJSON *gateway;
     const cJSON *cards;
     const cJSON *folders;
     const cJSON *issues;
@@ -79,6 +80,32 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         if (!cJSON_IsBool(value)) return -1;
         status->network_route_changed = cJSON_IsTrue(value);
         status->network_present = true;
+    }
+    gateway = cJSON_GetObjectItemCaseSensitive(result, "gateway");
+    if (gateway) {
+        if (!cJSON_IsObject(gateway) ||
+            ls_copy_json(status->gateway_url, sizeof(status->gateway_url),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "url")) != 0 ||
+            ls_copy_json(status->gateway_pin, sizeof(status->gateway_pin),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "pin")) != 0 ||
+            ls_copy_json(status->gateway_qr_url, sizeof(status->gateway_qr_url),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "qr_url")) != 0 ||
+            ls_copy_json(status->gateway_offer_expires, sizeof(status->gateway_offer_expires),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "offer_expires")) != 0 ||
+            ls_copy_json(status->gateway_fingerprint, sizeof(status->gateway_fingerprint),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "fingerprint")) != 0 ||
+            ls_copy_json(status->gateway_extension_expires, sizeof(status->gateway_extension_expires),
+                         cJSON_GetObjectItemCaseSensitive(gateway, "extension_expires")) != 0) return -1;
+        value = cJSON_GetObjectItemCaseSensitive(gateway, "open");
+        if (!cJSON_IsBool(value)) return -1;
+        status->gateway_open = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(gateway, "pairing");
+        if (!cJSON_IsBool(value)) return -1;
+        status->gateway_pairing = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(gateway, "trusted_browsers");
+        if (!cJSON_IsNumber(value) || value->valueint < 0 || value->valueint > 32) return -1;
+        status->gateway_trusted_browsers = value->valueint;
+        status->gateway_present = true;
     }
 
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
@@ -276,6 +303,25 @@ int ls_ui_network_profile_set(const char *socket_path, const char *profile,
     }
     return ls_ui_exchange(socket_path, "network.profile.set", arguments,
                           status, error, error_size);
+}
+
+int ls_ui_gateway_action(const char *socket_path, const char *operation,
+                         bool confirmed, ls_ui_status *status,
+                         char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    bool requires_confirmation;
+    if (!operation || !arguments) goto invalid;
+    requires_confirmation = strcmp(operation, "gateway.extend") == 0 ||
+                            strcmp(operation, "gateway.revoke-all") == 0;
+    if (strcmp(operation, "gateway.open") != 0 &&
+        strcmp(operation, "gateway.keepalive") != 0 &&
+        strcmp(operation, "gateway.close") != 0 && !requires_confirmation) goto invalid;
+    if (requires_confirmation && !cJSON_AddBoolToObject(arguments, "confirmed", confirmed)) goto invalid;
+    return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create web interface request");
+    return -1;
 }
 
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {

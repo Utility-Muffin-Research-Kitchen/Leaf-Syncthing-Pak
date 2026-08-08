@@ -45,6 +45,70 @@ func DirectlyConnectedNetworks(files RouteFiles) ([]string, error) {
 	return result, nil
 }
 
+func EligibleLANAddresses(files RouteFiles) ([]net.IP, error) {
+	networkStrings, err := DirectlyConnectedNetworks(files)
+	if err != nil {
+		return nil, err
+	}
+	networks := make([]*net.IPNet, 0, len(networkStrings))
+	for _, value := range networkStrings {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, err
+		}
+		networks = append(networks, network)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	addresses := []net.IP{}
+	for _, iface := range interfaces {
+		if !eligibleInterface(files.Sys, iface.Name) {
+			continue
+		}
+		assigned, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, candidate := range assigned {
+			ip, _, err := net.ParseCIDR(candidate.String())
+			if err != nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			for _, network := range networks {
+				if network.Contains(ip) {
+					addresses = append(addresses, ip)
+					break
+				}
+			}
+		}
+	}
+	addresses = normalizedRouteIPs(addresses)
+	return addresses, nil
+}
+
+func normalizedRouteIPs(addresses []net.IP) []net.IP {
+	seen := map[string]struct{}{}
+	result := make([]net.IP, 0, len(addresses))
+	for _, address := range addresses {
+		value := address.String()
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, address)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		left4, right4 := result[left].To4() != nil, result[right].To4() != nil
+		if left4 != right4 {
+			return left4
+		}
+		return result[left].String() < result[right].String()
+	})
+	return result
+}
+
 func eligibleInterface(root, name string) bool {
 	if name == "" || name == "lo" || strings.HasPrefix(name, "tun") ||
 		strings.HasPrefix(name, "tap") || strings.HasPrefix(name, "wg") ||

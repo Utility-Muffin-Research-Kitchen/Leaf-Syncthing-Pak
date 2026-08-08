@@ -105,8 +105,8 @@ matching `card-id`. A replacement card at the remembered mountpoint therefore
 appears as a separate unenrolled row, and duplicate live IDs fail closed.
 
 Generic Run, Stop, and Start-with-Leaf operations remain CTL-1. Folder, peer,
-gateway, and reset operations will be added only with the controller model that
-validates and executes them.
+and reset operations will be added only with the controller model that validates
+and executes them.
 
 ## `network.profile.set`
 
@@ -121,6 +121,40 @@ The controller applies the D-14 pause → policy update → unpause transition, 
 keeps watching routes while it runs. Sync Anywhere clears the per-peer boundary
 and enables global discovery, relays, and NAT traversal together. Success
 returns the full status result with the applied network profile.
+
+## Gateway operations
+
+The gateway is an optional, foreground-owned HTTPS view of a fixed read-only
+subset of the pinned Syncthing web UI. It never exposes the upstream Unix
+socket or its credentials directly. `status.get` includes a `gateway` object
+with listener state, pairing state, URL, four-digit PIN, fragment-bearing QR
+URL, offer expiry, certificate fingerprint, trusted-browser count, and any
+extension expiry.
+
+Opening and maintaining the foreground lease use empty arguments:
+
+```json
+{"v":1,"id":"gateway-open","op":"gateway.open","args":{}}
+{"v":1,"id":"gateway-keepalive","op":"gateway.keepalive","args":{}}
+{"v":1,"id":"gateway-close","op":"gateway.close","args":{}}
+```
+
+`gateway.open` binds one exact eligible LAN address, creates a two-minute
+single-use pairing offer, and returns the full status. `gateway.keepalive`
+renews the short foreground lease. `gateway.close` removes the listener unless
+the user explicitly granted an extension after pairing a browser.
+
+The destructive or longer-lived actions require an explicit confirmation:
+
+```json
+{"v":1,"id":"gateway-extend","op":"gateway.extend","args":{"confirmed":true}}
+{"v":1,"id":"gateway-revoke","op":"gateway.revoke-all","args":{"confirmed":true}}
+```
+
+`gateway.extend` grants at most 15 minutes and requires an already trusted
+browser. `gateway.revoke-all` removes all browser trust and closes the listener.
+Route/address changes, lease expiry, controller shutdown, or network-profile
+changes also close it.
 
 The canonical fixtures live in `tests/fixtures/ui-control-v1/`. `make test`
 round-trips their exact JSON and framing in Go and C.

@@ -10,11 +10,16 @@ import (
 )
 
 const (
-	Version             = 1
-	OperationGet        = "status.get"
-	OperationEnrollCard = "card.enroll"
-	OperationNetworkSet = "network.profile.set"
-	MaxIdentifier       = 64
+	Version                   = 1
+	OperationGet              = "status.get"
+	OperationEnrollCard       = "card.enroll"
+	OperationNetworkSet       = "network.profile.set"
+	OperationGatewayOpen      = "gateway.open"
+	OperationGatewayKeepAlive = "gateway.keepalive"
+	OperationGatewayClose     = "gateway.close"
+	OperationGatewayExtend    = "gateway.extend"
+	OperationGatewayRevoke    = "gateway.revoke-all"
+	MaxIdentifier             = 64
 )
 
 type Request struct {
@@ -43,6 +48,7 @@ type Status struct {
 	Game         GameStatus     `json:"game"`
 	Recovery     RecoveryStatus `json:"recovery"`
 	Network      *NetworkStatus `json:"network,omitempty"`
+	Gateway      *GatewayStatus `json:"gateway,omitempty"`
 	Cards        []CardStatus   `json:"cards"`
 	Folders      []FolderStatus `json:"folders"`
 	Issues       []Issue        `json:"issues"`
@@ -53,6 +59,18 @@ type NetworkStatus struct {
 	Profile         string   `json:"profile"`
 	AllowedNetworks []string `json:"allowed_networks"`
 	RouteChanged    bool     `json:"route_changed"`
+}
+
+type GatewayStatus struct {
+	Open             bool   `json:"open"`
+	URL              string `json:"url"`
+	PIN              string `json:"pin"`
+	QRURL            string `json:"qr_url"`
+	OfferExpires     string `json:"offer_expires"`
+	Fingerprint      string `json:"fingerprint"`
+	TrustedBrowsers  int    `json:"trusted_browsers"`
+	Pairing          bool   `json:"pairing"`
+	ExtensionExpires string `json:"extension_expires"`
 }
 
 type UpstreamStatus struct {
@@ -116,6 +134,7 @@ type Operations struct {
 	Status            func() Status
 	EnrollCard        func(string) (Status, *ProtocolError)
 	SetNetworkProfile func(string) (Status, *ProtocolError)
+	GatewayAction     func(string) (Status, *ProtocolError)
 }
 
 // Handle validates one request and returns one bounded response. Request
@@ -176,6 +195,30 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationGatewayOpen, OperationGatewayKeepAlive, OperationGatewayClose:
+		if operations.GatewayAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		if !emptyObject(request.Arguments) {
+			return failure(responseID, "bad-arguments", "gateway operation requires empty args")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.GatewayAction(request.Operation)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationGatewayExtend, OperationGatewayRevoke:
+		if operations.GatewayAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		if err := decodeConfirmedArguments(request.Arguments); err != nil {
+			return failure(responseID, "bad-arguments", "gateway operation requires confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.GatewayAction(request.Operation)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	default:
 		return failure(responseID, "unsupported-op", "unsupported UI control operation")
 	}
@@ -184,6 +227,21 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		return failure(responseID, "internal", "controller status unavailable")
 	}
 	return Response{Version: Version, ID: responseID, OK: true, Result: &status}
+}
+
+func decodeConfirmedArguments(raw json.RawMessage) error {
+	var arguments struct {
+		Confirmed bool `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed {
+		return errors.New("confirmation is required")
+	}
+	return nil
 }
 
 func decodeNetworkProfileArguments(raw json.RawMessage) (string, error) {
@@ -310,6 +368,14 @@ func (status Status) validate() error {
 	}
 	if status.Network != nil && !oneOf(status.Network.Profile, "lan-only", "sync-anywhere") {
 		return errors.New("invalid network profile")
+	}
+	if status.Gateway != nil {
+		if status.Gateway.TrustedBrowsers < 0 || status.Gateway.TrustedBrowsers > 32 ||
+			(status.Gateway.Open && (status.Gateway.URL == "" || status.Gateway.Fingerprint == "")) ||
+			(status.Gateway.Pairing && (!status.Gateway.Open || len(status.Gateway.PIN) != 4 ||
+				status.Gateway.QRURL == "" || status.Gateway.OfferExpires == "")) {
+			return errors.New("invalid gateway status")
+		}
 	}
 	if status.Upstream.State == "running" && (status.Upstream.Version == "" || status.Upstream.DeviceID == "") {
 		return errors.New("incomplete running status")

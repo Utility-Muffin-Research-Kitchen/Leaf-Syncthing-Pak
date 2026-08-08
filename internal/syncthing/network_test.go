@@ -12,6 +12,31 @@ import (
 	"testing"
 )
 
+type captureTransport struct {
+	header http.Header
+}
+
+func (transport *captureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.header = request.Header.Clone()
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody, Request: request}, nil
+}
+
+func TestGatewayTransportStripsClientCredentialsAndInjectsPrivateKey(t *testing.T) {
+	capture := &captureTransport{}
+	process := &Process{apiKey: "private", client: &http.Client{Transport: capture}}
+	request, _ := http.NewRequest(http.MethodGet, "http://syncthing-unix/", nil)
+	request.Header.Set("Authorization", "client")
+	request.Header.Set("X-API-Key", "wrong")
+	response, err := process.GatewayTransport().RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if capture.header.Get("Authorization") != "" || capture.header.Get("X-API-Key") != "private" {
+		t.Fatalf("gateway headers = %v", capture.header)
+	}
+}
+
 type rewriteTransport struct {
 	base *url.URL
 	next http.RoundTripper

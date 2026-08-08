@@ -61,7 +61,9 @@ int main(void) {
     round_trip("card-enroll-response.json", "\"state\":\"enrolled\"");
     round_trip("network-profile-set-request.json", "\"op\":\"network.profile.set\"");
     round_trip("network-profile-set-response.json", "\"profile\":\"lan-only\"");
+    round_trip("gateway-open-request.json", "\"op\":\"gateway.open\"");
+    round_trip("gateway-open-response.json", "\"pairing\":true");
     round_trip("unsupported-op-response.json", "\"code\":\"unsupported-op\"");
-    puts("PASS ui-control-v1 C fixture round trip (7 fixtures)");
+    puts("PASS ui-control-v1 C fixture round trip (9 fixtures)");
     return 0;
 }

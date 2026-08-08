@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/cards"
+	gatewayserver "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/gateway"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
@@ -21,6 +24,10 @@ const StopGrace = 10 * time.Second
 type UpstreamProcess interface {
 	Done() <-chan error
 	Shutdown(context.Context) error
+}
+
+type gatewayUpstream interface {
+	GatewayTransport() http.RoundTripper
 }
 
 type StartProcessFunc func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error)
@@ -76,6 +83,24 @@ func (runner Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("enforce initial network profile: %w", err)
 		}
 	}
+	var browserGateway *gatewayserver.Manager
+	if gatewayUpstream, ok := upstream.(gatewayUpstream); ok {
+		transport := gatewayUpstream.GatewayTransport()
+		if transport != nil {
+			browserGateway, err = gatewayserver.New(gatewayserver.Options{
+				StateDirectory: filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf"),
+				Upstream:       transport, Port: 8384,
+				Addresses: func() ([]net.IP, error) {
+					return syncthingconfig.EligibleLANAddresses(syncthingconfig.DefaultRouteFiles())
+				},
+			})
+			if err != nil {
+				_ = shutdownUpstream(upstream)
+				return fmt.Errorf("initialize browser gateway: %w", err)
+			}
+			defer browserGateway.Close()
+		}
+	}
 	loadCards := runner.LoadCards
 	if loadCards == nil {
 		loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
@@ -99,6 +124,14 @@ func (runner Runner) Run(ctx context.Context) error {
 		networkStatus := network.Status()
 		initialStatus.Network = &networkStatus
 		initialStatus.Capabilities = append(initialStatus.Capabilities, uicontrol.OperationNetworkSet)
+	}
+	if browserGateway != nil {
+		gatewayStatus := controlGatewayStatus(browserGateway.Status())
+		initialStatus.Gateway = &gatewayStatus
+		initialStatus.Capabilities = append(initialStatus.Capabilities,
+			uicontrol.OperationGatewayOpen, uicontrol.OperationGatewayKeepAlive,
+			uicontrol.OperationGatewayClose, uicontrol.OperationGatewayExtend,
+			uicontrol.OperationGatewayRevoke)
 	}
 	if !foreignConflict.Empty() {
 		initialStatus.Upstream.State = "conflict"
@@ -137,12 +170,46 @@ func (runner Runner) Run(ctx context.Context) error {
 			}
 			networkContext, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
+			if browserGateway != nil {
+				browserGateway.Close()
+			}
 			if err := network.Set(networkContext, profile); err != nil {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The network profile could not be applied safely"}
 			}
 			updated := status.Load().(uicontrol.Status)
 			networkStatus := network.Status()
 			updated.Network = &networkStatus
+			status.Store(updated)
+			return updated, nil
+		},
+		GatewayAction: func(operation string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if browserGateway == nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Web access is unavailable"}
+			}
+			var gatewayStatus gatewayserver.Status
+			var gatewayErr error
+			switch operation {
+			case uicontrol.OperationGatewayOpen:
+				gatewayStatus, gatewayErr = browserGateway.Open()
+			case uicontrol.OperationGatewayKeepAlive:
+				gatewayStatus, gatewayErr = browserGateway.KeepAlive()
+			case uicontrol.OperationGatewayClose:
+				gatewayErr = browserGateway.CloseForeground()
+				gatewayStatus = browserGateway.Status()
+			case uicontrol.OperationGatewayExtend:
+				gatewayStatus, gatewayErr = browserGateway.Extend()
+			case uicontrol.OperationGatewayRevoke:
+				gatewayErr = browserGateway.RevokeAll()
+				gatewayStatus = browserGateway.Status()
+			default:
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "unsupported-op", Message: "Unsupported web interface operation"}
+			}
+			if gatewayErr != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The web interface request could not be completed"}
+			}
+			updated := status.Load().(uicontrol.Status)
+			converted := controlGatewayStatus(gatewayStatus)
+			updated.Gateway = &converted
 			status.Store(updated)
 			return updated, nil
 		},
@@ -178,7 +245,7 @@ func (runner Runner) Run(ctx context.Context) error {
 	}
 	var networkChanges <-chan time.Time
 	var networkTicker *time.Ticker
-	if network != nil {
+	if network != nil || browserGateway != nil {
 		networkTicker = time.NewTicker(500 * time.Millisecond)
 		defer networkTicker.Stop()
 		networkChanges = networkTicker.C
@@ -201,20 +268,38 @@ func (runner Runner) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("UI control socket failed: %w", err)
 		case <-networkChanges:
-			networkContext, networkCancel := context.WithTimeout(ctx, 8*time.Second)
-			changed, refreshErr := network.RefreshIfChanged(networkContext)
-			networkCancel()
-			if refreshErr != nil {
-				if shutdownErr := shutdownUpstream(upstream); shutdownErr != nil {
-					return fmt.Errorf("refresh LAN boundary (%v); %w", refreshErr, shutdownErr)
+			if network != nil {
+				networkContext, networkCancel := context.WithTimeout(ctx, 8*time.Second)
+				changed, refreshErr := network.RefreshIfChanged(networkContext)
+				networkCancel()
+				if refreshErr != nil {
+					if shutdownErr := shutdownUpstream(upstream); shutdownErr != nil {
+						return fmt.Errorf("refresh LAN boundary (%v); %w", refreshErr, shutdownErr)
+					}
+					return fmt.Errorf("refresh LAN boundary: %w", refreshErr)
 				}
-				return fmt.Errorf("refresh LAN boundary: %w", refreshErr)
+				if changed {
+					if browserGateway != nil {
+						browserGateway.Close()
+					}
+					updated := status.Load().(uicontrol.Status)
+					networkStatus := network.Status()
+					updated.Network = &networkStatus
+					if browserGateway != nil {
+						gatewayStatus := controlGatewayStatus(browserGateway.Status())
+						updated.Gateway = &gatewayStatus
+					}
+					status.Store(updated)
+				}
 			}
-			if changed {
-				updated := status.Load().(uicontrol.Status)
-				networkStatus := network.Status()
-				updated.Network = &networkStatus
-				status.Store(updated)
+			if browserGateway != nil {
+				closed, _ := browserGateway.Tick()
+				if closed {
+					updated := status.Load().(uicontrol.Status)
+					gatewayStatus := controlGatewayStatus(browserGateway.Status())
+					updated.Gateway = &gatewayStatus
+					status.Store(updated)
+				}
 			}
 		case result := <-lifecycleEvents:
 			if result.err != nil {
@@ -265,6 +350,20 @@ func controlStatus(session *Session, game life1.GameState, inventory []cards.Car
 		Capabilities: []string{uicontrol.OperationGet, uicontrol.OperationEnrollCard},
 	}
 	return applyInventory(status, inventory, session.Folders)
+}
+
+func controlGatewayStatus(status gatewayserver.Status) uicontrol.GatewayStatus {
+	converted := uicontrol.GatewayStatus{
+		Open: status.Open, URL: status.URL, PIN: status.PIN, QRURL: status.QRURL,
+		Fingerprint: status.Fingerprint, TrustedBrowsers: status.TrustedBrowsers, Pairing: status.Pairing,
+	}
+	if !status.OfferExpires.IsZero() {
+		converted.OfferExpires = status.OfferExpires.UTC().Format(time.RFC3339)
+	}
+	if !status.ExtensionExpires.IsZero() {
+		converted.ExtensionExpires = status.ExtensionExpires.UTC().Format(time.RFC3339)
+	}
+	return converted
 }
 
 func applyInventory(status uicontrol.Status, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder) uicontrol.Status {

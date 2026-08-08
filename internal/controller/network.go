@@ -39,6 +39,7 @@ type networkManager struct {
 	derive     deriveNetworksFunc
 	profile    syncthingconfig.NetworkProfile
 	allowed    []string
+	observed   []string
 }
 
 func newNetworkManager(userdataPath, selfID string, upstream networkUpstream) (*networkManager, error) {
@@ -80,17 +81,18 @@ func (manager *networkManager) Set(ctx context.Context, profile string) error {
 func (manager *networkManager) RefreshIfChanged(ctx context.Context) (bool, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.profile != syncthingconfig.NetworkLANOnly {
-		return false, nil
-	}
-	allowed, err := manager.derive(manager.routeFiles)
+	routes, err := manager.derive(manager.routeFiles)
 	if err != nil {
 		return false, err
 	}
-	if slices.Equal(allowed, manager.allowed) {
+	if slices.Equal(routes, manager.observed) {
 		return false, nil
 	}
-	if err := manager.applyWithNetworksLocked(ctx, manager.profile, allowed, false); err != nil {
+	if manager.profile != syncthingconfig.NetworkLANOnly {
+		manager.observed = append([]string(nil), routes...)
+		return true, nil
+	}
+	if err := manager.applyWithNetworksLocked(ctx, manager.profile, routes, routes, false); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -105,18 +107,18 @@ func (manager *networkManager) Status() uicontrol.NetworkStatus {
 }
 
 func (manager *networkManager) applyLocked(ctx context.Context, profile syncthingconfig.NetworkProfile, persist bool) error {
-	var allowed []string
-	var err error
-	if profile == syncthingconfig.NetworkLANOnly {
-		allowed, err = manager.derive(manager.routeFiles)
-		if err != nil {
-			return err
-		}
+	routes, err := manager.derive(manager.routeFiles)
+	if err != nil {
+		return err
 	}
-	return manager.applyWithNetworksLocked(ctx, profile, allowed, persist)
+	var allowed []string
+	if profile == syncthingconfig.NetworkLANOnly {
+		allowed = routes
+	}
+	return manager.applyWithNetworksLocked(ctx, profile, allowed, routes, persist)
 }
 
-func (manager *networkManager) applyWithNetworksLocked(ctx context.Context, profile syncthingconfig.NetworkProfile, allowed []string, persist bool) error {
+func (manager *networkManager) applyWithNetworksLocked(ctx context.Context, profile syncthingconfig.NetworkProfile, allowed, observed []string, persist bool) error {
 	request := syncthingconfig.NetworkProfileRequest{
 		Profile: profile, SelfDeviceID: manager.selfID,
 		AllowedNetworks: append([]string(nil), allowed...),
@@ -131,6 +133,7 @@ func (manager *networkManager) applyWithNetworksLocked(ctx context.Context, prof
 	}
 	manager.profile = profile
 	manager.allowed = append([]string(nil), allowed...)
+	manager.observed = append([]string(nil), observed...)
 	return nil
 }
 

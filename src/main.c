@@ -5,12 +5,14 @@
 
 #include "ls_ctl1.h"
 #include "ls_ui_control.h"
+#include "qrcodegen.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define LS_SERVICE_ID "org.umrk.syncthing"
+#define LS_QR_MAX_VERSION 12
 
 typedef struct {
     char control_socket[1024];
@@ -30,6 +32,15 @@ static void ls_message(const char *message) {
     };
     cat_confirm_result result = {0};
     (void)cat_confirmation(&options, &result);
+}
+
+static int ls_confirm(const char *message, const char *label) {
+    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Cancel"},
+                                {.button = CAT_BTN_A, .label = label, .is_confirm = true}};
+    cat_message_opts options = {.message = message, .footer = footer, .footer_count = 2};
+    cat_confirm_result result = {0};
+    (void)cat_confirmation(&options, &result);
+    return result.confirmed ? 1 : 0;
 }
 
 static int ls_join_path(char *target, size_t size, const char *left, const char *right) {
@@ -246,14 +257,148 @@ static void ls_change_network(ls_app *app) {
     }
 }
 
+static int ls_min(int left, int right) { return left < right ? left : right; }
+
+static int ls_render_qr(const char *value, uint8_t *temporary, uint8_t *code) {
+    return value && value[0] && qrcodegen_encodeText(value, temporary, code,
+        qrcodegen_Ecc_MEDIUM, qrcodegen_VERSION_MIN, LS_QR_MAX_VERSION,
+        qrcodegen_Mask_AUTO, true);
+}
+
+static void ls_show_gateway(ls_app *app) {
+    uint8_t temporary[qrcodegen_BUFFER_LEN_FOR_VERSION(LS_QR_MAX_VERSION)];
+    uint8_t code[qrcodegen_BUFFER_LEN_FOR_VERSION(LS_QR_MAX_VERSION)];
+    char encoded_url[sizeof(app->status.gateway_qr_url)] = "";
+    uint32_t next_refresh = 0;
+    cat_footer_item footer[] = {
+        {.button = CAT_BTN_B, .label = "Back"},
+        {.button = CAT_BTN_A, .label = "New code", .is_confirm = true},
+        {.button = CAT_BTN_X, .label = "15 min"},
+        {.button = CAT_BTN_Y, .label = "Revoke all"},
+    };
+    if (ls_ui_gateway_action(app->control_socket, "gateway.open", false,
+                             &app->status, app->error, sizeof(app->error)) != 0) {
+        ls_message(app->error);
+        return;
+    }
+    for (;;) {
+        cat_input_event event;
+        cat_theme *theme = cat_get_theme();
+        TTF_Font *large = cat_get_font(CAT_FONT_LARGE);
+        TTF_Font *small = cat_get_font(CAT_FONT_TINY);
+        SDL_Rect content = cat_get_content_rect(true, cat_hints_enabled_from_env(), false);
+        int screen_width = cat_get_screen_width();
+        int margin = screen_width / 40;
+        int qr_available = ls_min(content.h - margin * 2, screen_width * 46 / 100);
+        int module_count;
+        int module_size;
+        int qr_size;
+        int qr_x;
+        int qr_y;
+        int text_width;
+        int cursor_y = content.y + margin;
+        char trusted[64];
+        uint32_t now = SDL_GetTicks();
+
+        if (!theme || !large || !small) break;
+        if (strcmp(encoded_url, app->status.gateway_qr_url) != 0) {
+            snprintf(encoded_url, sizeof(encoded_url), "%s", app->status.gateway_qr_url);
+            memset(code, 0, sizeof(code));
+            if (encoded_url[0] && !ls_render_qr(encoded_url, temporary, code)) {
+                ls_message("The pairing URL is too large to encode as QR.");
+                encoded_url[0] = '\0';
+            }
+        }
+        module_count = app->status.gateway_pairing && encoded_url[0] ? qrcodegen_getSize(code) + 8 : 0;
+        module_size = module_count > 0 ? qr_available / module_count : 0;
+        qr_size = module_size * module_count;
+        qr_x = screen_width - margin - qr_size;
+        qr_y = content.y + (content.h - qr_size) / 2;
+        text_width = qr_x - margin * 2;
+        while (cat_poll_input(&event)) {
+            if (!event.pressed) continue;
+            if (event.button == CAT_BTN_B) {
+                (void)ls_ui_gateway_action(app->control_socket, "gateway.close", false,
+                                           &app->status, app->error, sizeof(app->error));
+                return;
+            }
+            if (event.button == CAT_BTN_A) {
+                if (ls_ui_gateway_action(app->control_socket, "gateway.open", false,
+                                         &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
+                next_refresh = SDL_GetTicks() + 1000u;
+            } else if (event.button == CAT_BTN_X) {
+                if (app->status.gateway_trusted_browsers == 0) {
+                    ls_message("Pair at least one browser before starting the 15-minute extension.");
+                } else if (ls_confirm("Keep the read-only web interface open for 15 minutes after leaving this screen? New pairing will be disabled.", "Extend")) {
+                    if (ls_ui_gateway_action(app->control_socket, "gateway.extend", true,
+                                             &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
+                    return;
+                }
+            } else if (event.button == CAT_BTN_Y &&
+                       ls_confirm("Revoke every trusted browser and close the web interface now?", "Revoke")) {
+                if (ls_ui_gateway_action(app->control_socket, "gateway.revoke-all", true,
+                                         &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
+                return;
+            }
+        }
+        if ((int32_t)(now - next_refresh) >= 0) {
+            if (ls_ui_gateway_action(app->control_socket, "gateway.keepalive", false,
+                                     &app->status, app->error, sizeof(app->error)) != 0) {
+                ls_message(app->error);
+                return;
+            }
+            next_refresh = now + 1000u;
+        }
+
+        cat_draw_background();
+        cat_draw_screen_title("Web Interface", NULL);
+        cat_draw_text(small, "HTTPS address", margin, cursor_y, theme->hint);
+        cursor_y += TTF_FontHeight(small) + 2;
+        cat_draw_text_wrapped(small, app->status.gateway_url, margin, cursor_y,
+                              text_width, theme->text, CAT_ALIGN_LEFT);
+        cursor_y += cat_measure_wrapped_text_height(small, app->status.gateway_url, text_width) + margin;
+        cat_draw_text(small, "Pairing PIN", margin, cursor_y, theme->hint);
+        cursor_y += TTF_FontHeight(small) + 2;
+        cat_draw_text(large, app->status.gateway_pairing ? app->status.gateway_pin : "Closed",
+                      margin, cursor_y, theme->text);
+        cursor_y += TTF_FontHeight(large) + margin;
+        snprintf(trusted, sizeof(trusted), "Trusted browsers: %d", app->status.gateway_trusted_browsers);
+        cat_draw_text(small, trusted, margin, cursor_y, theme->text);
+        cursor_y += TTF_FontHeight(small) + margin;
+        cat_draw_text(small, "Certificate fingerprint", margin, cursor_y, theme->hint);
+        cursor_y += TTF_FontHeight(small) + 2;
+        cat_draw_text_wrapped(small, app->status.gateway_fingerprint, margin, cursor_y,
+                              text_width, theme->text, CAT_ALIGN_LEFT);
+
+        if (module_size > 0 && qr_size > 0) {
+            cat_draw_color white = {255, 255, 255, 255};
+            cat_draw_color black = {0, 0, 0, 255};
+            int quiet = 4;
+            int size = qrcodegen_getSize(code);
+            cat_draw_rect(qr_x, qr_y, qr_size, qr_size, white);
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    if (qrcodegen_getModule(code, x, y)) {
+                        cat_draw_rect(qr_x + (x + quiet) * module_size,
+                                      qr_y + (y + quiet) * module_size,
+                                      module_size, module_size, black);
+                    }
+                }
+            }
+        }
+        if (cat_hints_enabled_from_env()) cat_draw_footer(footer, 4);
+        cat_present();
+    }
+}
+
 static void ls_run_overview(ls_app *app) {
     int focus = 0;
     int scroll = 0;
     for (;;) {
         cat_option enabled_options[] = {{.label = "Off", .value = "Off"},
                                         {.label = "On", .value = "On"}};
-        cat_option value_options[6];
-        cat_options_item items[8];
+        cat_option value_options[7];
+        cat_options_item items[9];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Exit"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
@@ -291,6 +436,9 @@ static void ls_run_overview(ls_app *app) {
                 .label = app->status.network_present ? app->status.network_profile : "unavailable",
                 .value = app->status.network_present ? app->status.network_profile : "unavailable"};
             value_options[5] = (cat_option){.label = issue_value, .value = issue_value};
+            value_options[6] = (cat_option){
+                .label = app->status.gateway_present && app->status.gateway_open ? "Open" : "Closed",
+                .value = app->status.gateway_present && app->status.gateway_open ? "Open" : "Closed"};
             items[item_count++] = (cat_options_item){.label = "Cards", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[1], .option_count = 1};
             items[item_count++] = (cat_options_item){.label = "Folders", .type = CAT_OPT_CLICKABLE,
@@ -299,6 +447,8 @@ static void ls_run_overview(ls_app *app) {
                 .options = &value_options[3], .option_count = 1};
             items[item_count++] = (cat_options_item){.label = "Network", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[4], .option_count = 1};
+            items[item_count++] = (cat_options_item){.label = "Web Interface", .type = CAT_OPT_CLICKABLE,
+                .options = &value_options[6], .option_count = 1};
             items[item_count++] = (cat_options_item){.label = "Issues", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[5], .option_count = 1};
         }
@@ -348,6 +498,8 @@ static void ls_run_overview(ls_app *app) {
         } else if (app->controller_available && focus == 6) {
             ls_change_network(app);
         } else if (app->controller_available && focus == 7) {
+            ls_show_gateway(app);
+        } else if (app->controller_available && focus == 8) {
             ls_show_issues(app);
         }
     }
@@ -366,6 +518,10 @@ int main(void) {
     configuration.cpu_speed = CAT_CPU_SPEED_MENU;
     if (cat_init(&configuration) != CAT_OK) return 1;
     ls_run_overview(&app);
+    if (app.controller_available && app.status.gateway_present && app.status.gateway_open) {
+        (void)ls_ui_gateway_action(app.control_socket, "gateway.close", false,
+                                   &app.status, app.error, sizeof(app.error));
+    }
     cat_quit();
     return 0;
 }
