@@ -212,6 +212,27 @@ userdata roots named `.userdata/mlp1-b1-card-smoke`:
 - cleanup removed both exact temporary roots and the remote test binary, and
   the live `loong_pangu` process remained running.
 
+### Physical-removal preflight (not a pass)
+
+The connected base-0.9.0 device currently presents these two writable vfat
+volumes, both labeled `MLP1FRESH0`:
+
+- `/mnt/sdcard`: 256 GB-class `/dev/mmcblk3p1`, CID
+  `035344534d323536876cb5ce05019957`, about 58 GB used;
+- `/media/sdcard1`: 64 GB-class `/dev/mmcblk1p1`, CID
+  `0034323030303030000000008a0186c5`, about 1 GB used.
+
+A root-only bind view shows both covered mountpoint directories are empty but
+mutable. As expected for this stock base, `/usr/bin/umrk-mount-stubs` is absent.
+The exact B0a-qualified helper at
+`miniloong-launcher-switcher@f13980c4807ab977e85c4085da680209af0f977d`
+has SHA-256 `8185bd4b3efe32cc6f9ffed050fe36054511a81f74bd7d1f94ce04aa901d0a0f`;
+it passes shell syntax and can be streamed directly for a temporary lock before
+the first pull. `fsck.vfat`, `chattr`, `lsattr`, `mount`, `umount`, and `sync`
+are present. No lock or destructive card write was performed because unsafe FAT
+removal can damage unrelated data across the whole volume and the current cards
+have not been declared expendable.
+
 ## Ten-minute idle gate
 
 Command:
