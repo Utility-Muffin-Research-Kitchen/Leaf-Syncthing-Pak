@@ -43,10 +43,12 @@ An error response is:
 {"v":1,"id":"request-id","ok":false,"error":{"code":"unsupported-op","message":"unsupported UI control operation"}}
 ```
 
-The frozen error codes are `bad-request`, `unsupported-version`,
-`unsupported-op`, `bad-arguments`, and `internal`. Messages are display-safe
-and never contain API keys, certificates, tokens, config contents, or peer
-secrets. An unusable request id is returned as an empty string.
+The frozen envelope errors are `bad-request`, `unsupported-version`,
+`unsupported-op`, `bad-arguments`, and `internal`. Operations may additionally
+return `not-found`, `card-absent`, `card-read-only`, `invalid-card-id`, or
+`operation-failed`. Messages are display-safe and never contain API keys,
+certificates, tokens, config contents, or peer secrets. An unusable request id
+is returned as an empty string.
 
 Request objects are strict. Response result objects are append-only: a v1
 client must ignore unknown result members and use `capabilities` before showing
@@ -56,8 +58,8 @@ requires v2.
 
 ## `status.get`
 
-`args` must be `{}`. The current B1 controller advertises only `status.get` and
-returns:
+`args` must be `{}`. The current B1 controller advertises `status.get` and
+`card.enroll`, and returns:
 
 ```text
 controller                         running | recovery-pending | error
@@ -72,17 +74,36 @@ issues[]                           display-safe controller/card/folder issues
 capabilities[]                     supported operation names
 ```
 
-Card rows freeze physical identity, current slot/root, presence, writability,
+Card rows freeze physical identity, current slot/root, state (`absent`,
+`unenrolled`, `enrolled`, `invalid`, or `duplicate`), presence, writability,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
 identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
 versioning, and scoped issues. Counts and byte sizes are non-negative; an empty
-timestamp is unknown. B1 returns empty card/folder/issue arrays until enrollment
-and reconciliation land.
+timestamp is unknown. B1 returns empty folder rows until folder onboarding.
 
-Generic Run, Stop, and Start-with-Leaf operations remain CTL-1. No v1
-Syncthing mutation is advertised yet: card, folder, peer, network, gateway, and
-reset operations will be added only with the controller model that validates
-and executes them.
+## `card.enroll`
+
+```json
+{"v":1,"id":"enroll-primary","op":"card.enroll","args":{"source_id":"primary"}}
+```
+
+`source_id` names one configured PATH-2 slot. The controller requires an exact
+decoded mountinfo entry, a writable mount, and a real in-card userdata path. It
+writes a versioned random 128-bit `card-id` through a flushed same-directory
+temporary, renames it, then requires card `syncfs`. An abandoned temporary is
+discarded; an existing valid identity is returned unchanged, while an invalid
+one is never replaced. Success returns the same complete status result as
+`status.get` with the reconciled card inventory.
+
+The primary registry retains physical ID, last logical slot, and last measured
+retained bytes so an absent card remains visible. It is display/reconciliation
+metadata only: every write still requires the currently mounted card's own
+matching `card-id`. A replacement card at the remembered mountpoint therefore
+appears as a separate unenrolled row, and duplicate live IDs fail closed.
+
+Generic Run, Stop, and Start-with-Leaf operations remain CTL-1. Folder, peer,
+network, gateway, and reset operations will be added only with the controller
+model that validates and executes them.
 
 The canonical fixtures live in `tests/fixtures/ui-control-v1/`. `make test`
 round-trips their exact JSON and framing in Go and C.

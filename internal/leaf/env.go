@@ -19,16 +19,18 @@ type getenvFunc func(string) (string, bool)
 // A sourced env.sh is already reflected in the process environment; explicit
 // values therefore win before the direct-launch fallbacks below are applied.
 type Environment struct {
-	Platform         string
-	Device           string
-	SDCardPath       string
-	SystemPath       string
-	PlatformPath     string
-	UserdataPath     string
-	LogsPath         string
-	RuntimePath      string
-	InternalDataPath string
-	Sources          SourceList
+	Platform           string
+	Device             string
+	SDCardPath         string
+	SystemPath         string
+	PlatformPath       string
+	UserdataPath       string
+	SharedUserdataPath string
+	LogsPath           string
+	RuntimePath        string
+	InternalDataPath   string
+	Sources            SourceList
+	SourcePathsV2      bool
 }
 
 func LoadEnvironment() (Environment, error) {
@@ -54,7 +56,7 @@ func loadEnvironment(getenv getenvFunc) (Environment, error) {
 	if err != nil {
 		return Environment{}, err
 	}
-	sources, err := resolveSources(getenv, roots, secondary)
+	sources, sourcePathsV2, err := resolveSources(getenv, roots, secondary)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -63,18 +65,22 @@ func loadEnvironment(getenv getenvFunc) (Environment, error) {
 		filepath.Join(primary, ".system", "leaf", "platforms", platform)))
 	userdataPath := cleanPath(value("USERDATA_PATH",
 		filepath.Join(primary, ".userdata", platform)))
+	sharedUserdataPath := cleanPath(value("SHARED_USERDATA_PATH",
+		filepath.Join(primary, ".userdata", "shared")))
 
 	return Environment{
-		Platform:         platform,
-		Device:           value("DEVICE", platform),
-		SDCardPath:       primary,
-		SystemPath:       systemPath,
-		PlatformPath:     cleanPath(value("UMRK_PLATFORM_PATH", systemPath)),
-		UserdataPath:     userdataPath,
-		LogsPath:         cleanPath(value("LOGS_PATH", filepath.Join(userdataPath, "logs"))),
-		RuntimePath:      cleanPath(value("UMRK_RUNTIME_PATH", filepath.Join(os.TempDir(), "jawaka-runtime"))),
-		InternalDataPath: cleanPath(value("UMRK_INTERNAL_DATA_PATH", filepath.Join(primary, ".umrk", platform))),
-		Sources:          sources,
+		Platform:           platform,
+		Device:             value("DEVICE", platform),
+		SDCardPath:         primary,
+		SystemPath:         systemPath,
+		PlatformPath:       cleanPath(value("UMRK_PLATFORM_PATH", systemPath)),
+		UserdataPath:       userdataPath,
+		SharedUserdataPath: sharedUserdataPath,
+		LogsPath:           cleanPath(value("LOGS_PATH", filepath.Join(userdataPath, "logs"))),
+		RuntimePath:        cleanPath(value("UMRK_RUNTIME_PATH", filepath.Join(os.TempDir(), "jawaka-runtime"))),
+		InternalDataPath:   cleanPath(value("UMRK_INTERNAL_DATA_PATH", filepath.Join(primary, ".umrk", platform))),
+		Sources:            sources,
+		SourcePathsV2:      sourcePathsV2,
 	}, nil
 }
 

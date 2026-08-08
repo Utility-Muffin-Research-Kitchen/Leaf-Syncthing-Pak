@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/cards"
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
@@ -21,6 +24,8 @@ type UpstreamProcess interface {
 }
 
 type StartProcessFunc func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error)
+type LoadCardsFunc func(leaf.SourceList, string) ([]cards.Card, error)
+type EnrollCardFunc func(leaf.Source) (cards.Identity, bool, error)
 
 type lifecycleResult struct {
 	event life1.Event
@@ -54,11 +59,49 @@ func (runner Runner) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("start upstream: %w", err)
 	}
+	loadCards := runner.LoadCards
+	if loadCards == nil {
+		loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
+			live, err := cards.InspectSources(sources, cards.Options{})
+			if err != nil {
+				return nil, err
+			}
+			return cards.ReconcileRegistry(registryDirectory, sources, live, nil)
+		}
+	}
+	registryDirectory := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf")
+	cardInventory, err := loadCards(runner.Config.Sources, registryDirectory)
+	if err != nil {
+		_ = shutdownUpstream(upstream)
+		return fmt.Errorf("verify cards: %w", err)
+	}
 	gameState := session.State
 	var status atomic.Value
-	status.Store(controlStatus(session, gameState))
-	control, err := uicontrol.Listen(runner.Config.ControlSocket, func() uicontrol.Status {
-		return status.Load().(uicontrol.Status)
+	status.Store(controlStatus(session, gameState, cardInventory))
+	enrollCard := runner.EnrollCard
+	if enrollCard == nil {
+		enrollCard = func(source leaf.Source) (cards.Identity, bool, error) {
+			return cards.Enroll(source, cards.Options{})
+		}
+	}
+	control, err := uicontrol.Listen(runner.Config.ControlSocket, uicontrol.Operations{
+		Status: func() uicontrol.Status { return status.Load().(uicontrol.Status) },
+		EnrollCard: func(sourceID string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			source, found := runner.Config.Sources.ByID(sourceID)
+			if !found {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The requested card slot is not configured"}
+			}
+			if _, _, err := enrollCard(source); err != nil {
+				return uicontrol.Status{}, cardOperationError(err)
+			}
+			inventory, err := loadCards(runner.Config.Sources, registryDirectory)
+			if err != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The card was enrolled but inventory refresh failed"}
+			}
+			updated := applyCardInventory(status.Load().(uicontrol.Status), inventory)
+			status.Store(updated)
+			return updated, nil
+		},
 	})
 	if err != nil {
 		_ = shutdownUpstream(upstream)
@@ -111,21 +154,84 @@ func (runner Runner) Run(ctx context.Context) error {
 				return err
 			}
 			gameState = reconcileGameState(gameState, result.event)
-			status.Store(controlStatus(session, gameState))
+			updated := status.Load().(uicontrol.Status)
+			updated.Game = uicontrol.GameStatus{Active: gameState.Active, LaunchID: gameState.LaunchID, SourceID: gameState.SourceID}
+			status.Store(updated)
 		}
 	}
 }
 
-func controlStatus(session *Session, game life1.GameState) uicontrol.Status {
-	return uicontrol.Status{
+func controlStatus(session *Session, game life1.GameState, inventory []cards.Card) uicontrol.Status {
+	status := uicontrol.Status{
 		Controller: "running",
 		Upstream: uicontrol.UpstreamStatus{
 			State: "running", Version: session.Identity.UpstreamVersion, DeviceID: session.Identity.DeviceID,
 		},
 		Game:         uicontrol.GameStatus{Active: game.Active, LaunchID: game.LaunchID, SourceID: game.SourceID},
 		Recovery:     uicontrol.RecoveryStatus{State: "ready", Changed: session.Recovery.Changed},
-		Capabilities: []string{uicontrol.OperationGet},
+		Capabilities: []string{uicontrol.OperationGet, uicontrol.OperationEnrollCard},
 	}
+	return applyCardInventory(status, inventory)
+}
+
+func applyCardInventory(status uicontrol.Status, inventory []cards.Card) uicontrol.Status {
+	status.Cards = []uicontrol.CardStatus{}
+	issues := make([]uicontrol.Issue, 0, len(status.Issues))
+	for _, issue := range status.Issues {
+		if issue.Scope != "card" {
+			issues = append(issues, issue)
+		}
+	}
+	status.Issues = issues
+	for _, card := range inventory {
+		identifier := card.Identity.ID
+		if identifier == "" {
+			identifier = "source:" + card.Source.ID
+		}
+		row := uicontrol.CardStatus{
+			ID: identifier, IDSuffix: identitySuffix(card.Identity.ID), Slot: sourceLabel(card.Source),
+			Root: card.Source.Root, State: string(card.State), Enrolled: card.Identity.ID != "",
+			Present: card.Present, Writable: card.Writable, DuplicateID: card.DuplicateID,
+			RetainedBytes: card.RetainedBytes, Issues: []uicontrol.Issue{},
+		}
+		for _, issue := range card.Issues {
+			converted := uicontrol.Issue{Code: issue.Code, Message: issue.Message, Scope: "card", SubjectID: identifier}
+			row.Issues = append(row.Issues, converted)
+			status.Issues = append(status.Issues, converted)
+		}
+		status.Cards = append(status.Cards, row)
+	}
+	return status
+}
+
+func cardOperationError(err error) *uicontrol.ProtocolError {
+	switch {
+	case errors.Is(err, cards.ErrUnavailable):
+		return &uicontrol.ProtocolError{Code: "card-absent", Message: "The requested card is not mounted"}
+	case errors.Is(err, cards.ErrReadOnly):
+		return &uicontrol.ProtocolError{Code: "card-read-only", Message: "The requested card is read-only"}
+	case errors.Is(err, cards.ErrInvalidIdentity):
+		return &uicontrol.ProtocolError{Code: "invalid-card-id", Message: "The existing card identity is invalid and was not replaced"}
+	default:
+		return &uicontrol.ProtocolError{Code: "operation-failed", Message: "Card enrollment failed without changing an existing identity"}
+	}
+}
+
+func identitySuffix(identity string) string {
+	if len(identity) <= 8 {
+		return identity
+	}
+	return identity[len(identity)-8:]
+}
+
+func sourceLabel(source leaf.Source) string {
+	if source.Primary || source.ID == "primary" {
+		return "Primary"
+	}
+	if source.ID == "secondary_sd" {
+		return "Secondary"
+	}
+	return source.ID
 }
 
 func reconcileGameState(current life1.GameState, event life1.Event) life1.GameState {

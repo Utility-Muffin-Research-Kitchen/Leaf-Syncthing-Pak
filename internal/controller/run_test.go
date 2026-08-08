@@ -2,12 +2,18 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/cards"
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
 type fakeUpstream struct {
@@ -73,6 +79,68 @@ func TestReconcileGameStateIgnoresStaleFinish(t *testing.T) {
 	}
 }
 
+func TestRunEnrollsCardThroughControlSocket(t *testing.T) {
+	config := testConfig(t)
+	lifecycle := &fakeLifecycle{}
+	upstream := &fakeUpstream{done: make(chan error)}
+	runner := testServiceRunner(config, lifecycle, upstream)
+	enrolled := false
+	runner.EnrollCard = func(source leaf.Source) (cards.Identity, bool, error) {
+		if source.ID != "primary" {
+			t.Fatalf("enrolled source = %s", source.ID)
+		}
+		enrolled = true
+		return cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"}, true, nil
+	}
+	runner.LoadCards = func(sources leaf.SourceList, _ string) ([]cards.Card, error) {
+		card := cards.Card{Source: sources[0], State: cards.StateUnenrolled, Present: true, Writable: true}
+		if enrolled {
+			card.State = cards.StateEnrolled
+			card.Identity = cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"}
+		}
+		return []cards.Card{card}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Lstat(config.ControlSocket); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("control socket did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	connection, err := net.Dial("unix", config.ControlSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := json.RawMessage(`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"primary"}}`)
+	if err := life1.Write(connection, request); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := life1.Read(connection)
+	_ = connection.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response uicontrol.Response
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Result == nil || len(response.Result.Cards) != 1 ||
+		response.Result.Cards[0].State != "enrolled" || !enrolled {
+		t.Fatalf("enrollment response = %+v, enrolled=%v", response, enrolled)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunReturnsUnexpectedUpstreamExit(t *testing.T) {
 	config := testConfig(t)
 	lifecycle := &fakeLifecycle{}
@@ -102,5 +170,6 @@ func testServiceRunner(config Config, lifecycle *fakeLifecycle, upstream *fakeUp
 		StartProcess: func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
 			return upstream, nil
 		},
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) { return nil, nil },
 	}
 }

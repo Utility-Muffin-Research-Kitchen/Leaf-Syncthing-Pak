@@ -113,19 +113,20 @@ if [ -n "$LIVE_PANGU_PID" ]; then
 fi
 
 runtime="$REMOTE_DIR/runtime"
-userdata="$REMOTE_DIR/userdata"
+userdata="$REMOTE_DIR/sd/.userdata/mlp1"
+shared_userdata="$REMOTE_DIR/sd/.userdata/shared"
 state="$REMOTE_DIR/state"
 logs="$REMOTE_DIR/logs"
 socket="$runtime/jawakad.sock"
-"${ADB[@]}" shell "mkdir -p '$runtime' '$userdata' '$state' '$logs'"
+"${ADB[@]}" shell "mkdir -p '$runtime' '$userdata' '$shared_userdata' '$state' '$logs'"
 "${ADB[@]}" shell "(cd '$REMOTE_DIR' && exec env \
-    PLATFORM=mlp1 \
+    UMRK_ENV_VERSION=2 PLATFORM=mlp1 \
     SDCARD_PATH='$REMOTE_DIR/sd' SDCARD_PATHS='$REMOTE_DIR/sd' \
     ROMS_PATH='$REMOTE_DIR/sd/Roms' ROMS_PATHS='$REMOTE_DIR/sd/Roms' \
     IMAGES_PATH='$REMOTE_DIR/sd/Images' IMAGES_PATHS='$REMOTE_DIR/sd/Images' \
     APPS_PATH='$REMOTE_DIR/sd/Apps' APPS_PATHS='$REMOTE_DIR/sd/Apps' \
     USERDATA_PATH='$userdata' USERDATA_PATHS='$userdata' \
-    SHARED_USERDATA_PATH='$userdata/shared' SHARED_USERDATA_PATHS='$userdata/shared' \
+    SHARED_USERDATA_PATH='$shared_userdata' SHARED_USERDATA_PATHS='$shared_userdata' \
     LOGS_PATH='$logs' MUSIC_PATH='$REMOTE_DIR/sd/Music' MUSIC_PATHS='$REMOTE_DIR/sd/Music' \
     VIDEO_PATH='$REMOTE_DIR/sd/Videos' VIDEO_PATHS='$REMOTE_DIR/sd/Videos' \
     BIOS_PATH='$REMOTE_DIR/sd/BIOS' BIOS_PATHS='$REMOTE_DIR/sd/BIOS' \
@@ -179,7 +180,11 @@ run_and_wait() {
     grep -F '"controller":"running"' <<<"$control_response" >/dev/null
     grep -F '"state":"running"' <<<"$control_response" >/dev/null
     grep -F '"version":"v2.1.2"' <<<"$control_response" >/dev/null
-    grep -F '"capabilities":["status.get"]' <<<"$control_response" >/dev/null
+    grep -F '"capabilities":["status.get","card.enroll"]' <<<"$control_response" >/dev/null
+    control_response="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$control_socket' request '{\"v\":1,\"id\":\"enroll-card\",\"op\":\"card.enroll\",\"args\":{\"source_id\":\"primary\"}}'" | tr -d '\r')"
+    grep -F '"ok":true' <<<"$control_response" >/dev/null
+    grep -F '"state":"enrolled"' <<<"$control_response" >/dev/null
+    grep -F '"slot":"Primary"' <<<"$control_response" >/dev/null
     "${ADB[@]}" shell "awk '\$2 ~ /:20C0\$/ && \$4 == \"0A\" { found=1 } END { exit found ? 1 : 0 }' /proc/net/tcp /proc/net/tcp6"
     "${ADB[@]}" shell "ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' | grep -v grep >/dev/null"
     "${ADB[@]}" shell "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' | grep -v grep | wc -l)\" -eq 2"
@@ -265,14 +270,14 @@ measure_idle() {
 
 run_and_wait first-run
 measure_idle "$MEASURE_SECONDS"
-first_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1'" | tr -d '\r')"
+first_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
 stop_and_wait first-stop
 run_and_wait second-run
-second_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1'" | tr -d '\r')"
+second_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
 if [ "$first_hashes" != "$second_hashes" ]; then
     echo "identity hashes changed across supervised restart" >&2
     exit 1
 fi
 stop_and_wait second-stop
 
-echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable identity, verified stop)"
+echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable device/card identity, verified stop)"

@@ -22,6 +22,7 @@ fixture with:
 
 ```sh
 scripts/adb-mlp1-b1-controller-smoke.sh
+scripts/adb-mlp1-b1-card-safety.sh
 B1_MEASURE_SECONDS=600 scripts/adb-mlp1-b1-controller-smoke.sh
 ```
 
@@ -36,11 +37,13 @@ plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
 the first six ordered controller startup steps (including recoverable
 three-file config recovery and same-filesystem identity generation/promotion),
 the token-preserving private-socket/LAN-only initial profile, and canonical
-cross-language fixture tests. The supervised upstream runner, readiness probe,
-guardian cleanup, and reproducible MLP1 smoke are present; the card/folder
-model, private UI socket, and Catastrophe UI planned for B1–B3 are not. Its
-launcher exits with an explicit qualification-only message so a staged spike
-cannot be mistaken for the finished app. `Leaf-Syncthing-Pak` and
+cross-language fixture tests. The source tree also contains the unfinished B1
+controller: supervised upstream lifecycle, strict PATH-2 card enrollment and
+inventory, and the private UI control socket. The B0a package assembler does
+not include or launch that controller, and the C/Catastrophe UI and folder
+onboarding remain unfinished. Its launcher exits with an explicit
+qualification-only message so a staged spike cannot be mistaken for the
+finished app. `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will
 outlive this spike artifact; the `0.0.0-b0a` package itself must never enter a
 Leaf release or production Pak Rat catalog.
@@ -60,3 +63,6 @@ the locked Syncthing release archive, signed checksums, source offer, and releas
 key. The verifier restricts initial and redirect hosts, validates the pinned
 signer fingerprint and signatures, and checks every locked digest before the
 artifact can be packaged.
+Local tests expect `../umrk-workspace`; CI checks out the explicitly pinned
+contract revision beside this repository. `make test` runs all Go packages and
+the standalone C UI-protocol fixture check.

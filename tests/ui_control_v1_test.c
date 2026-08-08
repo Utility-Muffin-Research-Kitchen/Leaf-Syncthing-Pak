@@ -56,8 +56,10 @@ static void round_trip(const char *name, const char *required) {
 
 int main(void) {
     round_trip("status-get-request.json", "\"op\":\"status.get\"");
-    round_trip("status-get-response.json", "\"capabilities\":[\"status.get\"]");
+    round_trip("status-get-response.json", "\"capabilities\":[\"status.get\",\"card.enroll\"]");
+    round_trip("card-enroll-request.json", "\"op\":\"card.enroll\"");
+    round_trip("card-enroll-response.json", "\"state\":\"enrolled\"");
     round_trip("unsupported-op-response.json", "\"code\":\"unsupported-op\"");
-    puts("PASS ui-control-v1 C fixture round trip (3 fixtures)");
+    puts("PASS ui-control-v1 C fixture round trip (5 fixtures)");
     return 0;
 }

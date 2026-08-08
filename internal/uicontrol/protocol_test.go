@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 3 {
-		t.Fatalf("checked %d fixtures, want 3", checked)
+	if checked != 5 {
+		t.Fatalf("checked %d fixtures, want 5", checked)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestHandleRejectsProtocolDrift(t *testing.T) {
 func TestServerOneShotExchangeAndCleanup(t *testing.T) {
 	directory := shortTempDir(t)
 	socket := filepath.Join(directory, SocketName)
-	server, err := Listen(socket, fixtureStatus)
+	server, err := Listen(socket, Operations{Status: fixtureStatus})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,12 +134,31 @@ func TestServerRefusesRegularFileAtSocketPath(t *testing.T) {
 	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if server, err := Listen(path, fixtureStatus); err == nil || server != nil {
+	if server, err := Listen(path, Operations{Status: fixtureStatus}); err == nil || server != nil {
 		t.Fatal("server replaced a non-socket path")
 	}
 	contents, err := os.ReadFile(path)
 	if err != nil || string(contents) != "keep" {
 		t.Fatalf("protected path changed: %q, %v", contents, err)
+	}
+}
+
+func TestEnrollCardOperation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		EnrollCard: func(sourceID string) (Status, *ProtocolError) {
+			called = sourceID
+			return fixtureStatus(), nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"secondary_sd"}}`))
+	if !response.OK || called != "secondary_sd" {
+		t.Fatalf("enrollment response = %+v, source=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"../bad"}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("unsafe source response = %+v", response)
 	}
 }
 
@@ -158,6 +177,6 @@ func fixtureStatus() Status {
 		Controller: "running",
 		Upstream:   UpstreamStatus{State: "running", Version: "v2.1.2", DeviceID: "FIXTURE-DEVICE"},
 		Game:       GameStatus{}, Recovery: RecoveryStatus{State: "ready"},
-		Capabilities: []string{OperationGet},
+		Capabilities: []string{OperationGet, OperationEnrollCard},
 	}
 }

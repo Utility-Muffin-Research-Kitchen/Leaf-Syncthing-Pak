@@ -19,16 +19,16 @@ const (
 )
 
 type Server struct {
-	listener *net.UnixListener
-	status   func() Status
-	done     chan error
-	close    sync.Once
+	listener   *net.UnixListener
+	operations Operations
+	done       chan error
+	close      sync.Once
 }
 
 // Listen creates the mode-0600 one-shot request/response socket. The framing
 // intentionally reuses the already-qualified CTL-1/LIFE-1 transport.
-func Listen(path string, status func() Status) (*Server, error) {
-	if status == nil || !filepath.IsAbs(path) || filepath.Base(path) != SocketName {
+func Listen(path string, operations Operations) (*Server, error) {
+	if operations.Status == nil || !filepath.IsAbs(path) || filepath.Base(path) != SocketName {
 		return nil, errors.New("UI control: absolute control.sock path and status provider are required")
 	}
 	parent, err := os.Lstat(filepath.Dir(path))
@@ -60,7 +60,7 @@ func Listen(path string, status func() Status) (*Server, error) {
 		return nil, fmt.Errorf("UI control: socket mode/type invalid: mode=%v error=%v", fileMode(info), err)
 	}
 
-	server := &Server{listener: listener, status: status, done: make(chan error, 1)}
+	server := &Server{listener: listener, operations: operations, done: make(chan error, 1)}
 	go server.serve()
 	return server, nil
 }
@@ -98,12 +98,13 @@ func (server *Server) serve() {
 }
 
 func (server *Server) exchange(connection *net.UnixConn) {
-	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
+	_ = connection.SetReadDeadline(time.Now().Add(ioTimeout))
 	payload, err := life1.Read(connection)
 	if err != nil {
 		return
 	}
-	response := Handle(payload, server.status())
+	response := server.operations.Handle(payload)
+	_ = connection.SetWriteDeadline(time.Now().Add(ioTimeout))
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return

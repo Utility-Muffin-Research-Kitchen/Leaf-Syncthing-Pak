@@ -71,6 +71,40 @@ func TestEnvironmentRejectsMalformedSourceLists(t *testing.T) {
 	}
 }
 
+func TestEnvironmentValidatesSourcePathsV2(t *testing.T) {
+	values := map[string]string{
+		"UMRK_ENV_VERSION": "2", "PLATFORM": "mlp1",
+		"SDCARD_PATH": "/cards/a", "SDCARD_PATHS": "/cards/a:/cards/b",
+		"USERDATA_PATH": "/cards/a/userdata", "USERDATA_PATHS": "/cards/a/userdata:/cards/b/userdata",
+		"SHARED_USERDATA_PATH": "/cards/a/shared", "SHARED_USERDATA_PATHS": "/cards/a/shared:/cards/b/shared",
+		"SAVES_PATH": "/cards/a/Saves", "SAVES_PATHS": "/cards/a/Saves:/cards/b/Saves",
+		"STATES_PATH": "/cards/a/States", "STATES_PATHS": "/cards/a/States:/cards/b/States",
+	}
+	environment, err := loadEnvironment(mapEnv(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !environment.SourcePathsV2 || environment.Sources[1].UserdataPath != "/cards/b/userdata" ||
+		environment.Sources[1].SharedUserdataPath != "/cards/b/shared" {
+		t.Fatalf("source-paths-v2 was not retained: %+v", environment)
+	}
+
+	for name, value := range map[string]string{
+		"USERDATA_PATHS":        "/cards/a/userdata",
+		"SHARED_USERDATA_PATHS": "/cards/a/shared:/elsewhere/shared",
+		"SAVES_PATH":            "/cards/a/Saves/",
+	} {
+		broken := make(map[string]string, len(values))
+		for key, original := range values {
+			broken[key] = original
+		}
+		broken[name] = value
+		if _, err := loadEnvironment(mapEnv(broken)); err == nil {
+			t.Errorf("accepted invalid source-paths-v2 %s=%q", name, value)
+		}
+	}
+}
+
 func TestMissingSecondaryRemainsIdentifiable(t *testing.T) {
 	primary := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "removed-card")

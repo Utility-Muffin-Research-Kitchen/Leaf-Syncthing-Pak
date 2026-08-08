@@ -39,6 +39,7 @@ type Config struct {
 	GUISocket       string
 	ControlSocket   string
 	DaemonSocket    string
+	Sources         leaf.SourceList
 	Mode            life1.Mode
 	AckMS           int
 	WaitMS          int
@@ -64,6 +65,8 @@ type Runner struct {
 	EnsureIdentity EnsureIdentityFunc
 	ApplyPause     ApplyPauseFunc
 	StartProcess   StartProcessFunc
+	LoadCards      LoadCardsFunc
+	EnrollCard     EnrollCardFunc
 	Logf           func(string, ...any)
 }
 
@@ -80,6 +83,9 @@ func LoadConfig() (Config, error) {
 	environment, err := leaf.LoadEnvironment()
 	if err != nil {
 		return Config{}, err
+	}
+	if !environment.SourcePathsV2 {
+		return Config{}, errors.New("leaf-syncthing: source-paths-v2 with aligned USERDATA_PATHS is required")
 	}
 	socket, err := life1.ResolveSocket(os.Getenv, environment.RuntimePath)
 	if err != nil {
@@ -99,6 +105,7 @@ func LoadConfig() (Config, error) {
 		GUISocket:       filepath.Join(environment.RuntimePath, "services", ServiceDirName, "syncthing-gui.sock"),
 		ControlSocket:   filepath.Join(environment.RuntimePath, "services", ServiceDirName, "control.sock"),
 		DaemonSocket:    socket,
+		Sources:         environment.Sources,
 		Mode:            life1.ModeNotify,
 		AckMS:           life1.DefaultAckMS,
 		WaitMS:          life1.DefaultWaitMS,
@@ -231,8 +238,16 @@ func (session *Session) Close() error {
 func (config Config) validate() error {
 	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
 		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.GUISocket == "" ||
-		config.ControlSocket == "" || config.DaemonSocket == "" {
+		config.ControlSocket == "" || config.DaemonSocket == "" || len(config.Sources) == 0 {
 		return errors.New("leaf-syncthing: runtime, userdata, config, data, upstream, and daemon values are required")
+	}
+	for _, source := range config.Sources {
+		if source.ID == "" || source.Root == "" || source.UserdataPath == "" {
+			return errors.New("leaf-syncthing: every PATH-2 source requires id, root, and userdata")
+		}
+		if _, err := leaf.RelativeWithin(source.Root, source.UserdataPath); err != nil {
+			return fmt.Errorf("leaf-syncthing: source %s userdata is outside its card: %w", source.ID, err)
+		}
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {
 		return fmt.Errorf("leaf-syncthing: unsupported game mode %q", config.Mode)

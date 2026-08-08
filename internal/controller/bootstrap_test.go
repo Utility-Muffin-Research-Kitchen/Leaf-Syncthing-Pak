@@ -227,7 +227,10 @@ func testConfig(t *testing.T) Config {
 		GUISocket:       filepath.Join(base, "runtime", "services", ServiceDirName, "syncthing-gui.sock"),
 		ControlSocket:   filepath.Join(base, "runtime", "services", ServiceDirName, "control.sock"),
 		DaemonSocket:    filepath.Join(base, "jawakad.sock"),
-		Mode:            life1.ModeNotify, AckMS: life1.DefaultAckMS,
+		Sources: leaf.SourceList{{
+			ID: "primary", Root: base, Primary: true, UserdataPath: userdata,
+		}},
+		Mode: life1.ModeNotify, AckMS: life1.DefaultAckMS,
 	}
 }
 

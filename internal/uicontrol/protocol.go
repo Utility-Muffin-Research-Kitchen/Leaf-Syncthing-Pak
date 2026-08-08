@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	Version       = 1
-	OperationGet  = "status.get"
-	MaxIdentifier = 64
+	Version             = 1
+	OperationGet        = "status.get"
+	OperationEnrollCard = "card.enroll"
+	MaxIdentifier       = 64
 )
 
 type Request struct {
@@ -103,10 +104,19 @@ type Issue struct {
 	SubjectID string `json:"subject_id"`
 }
 
+type Operations struct {
+	Status     func() Status
+	EnrollCard func(string) (Status, *ProtocolError)
+}
+
 // Handle validates one request and returns one bounded response. Request
 // objects are strict; response result objects are append-only so older UIs can
 // ignore fields added by later package builds.
 func Handle(payload json.RawMessage, status Status) Response {
+	return (Operations{Status: func() Status { return status }}).Handle(payload)
+}
+
+func (operations Operations) Handle(payload json.RawMessage) Response {
 	request, err := decodeRequest(payload)
 	if err != nil {
 		return failure("", "bad-request", "invalid UI control request")
@@ -121,18 +131,52 @@ func Handle(payload json.RawMessage, status Status) Response {
 	if responseID == "" {
 		return failure("", "bad-request", "invalid request id")
 	}
-	if request.Operation != OperationGet {
+	var status Status
+	switch request.Operation {
+	case OperationGet:
+		if !emptyObject(request.Arguments) {
+			return failure(responseID, "bad-arguments", "status.get requires empty args")
+		}
+		if operations.Status == nil {
+			return failure(responseID, "internal", "controller status unavailable")
+		}
+		status = operations.Status()
+	case OperationEnrollCard:
+		if operations.EnrollCard == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		sourceID, err := decodeEnrollCardArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "card.enroll requires one valid source_id")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.EnrollCard(sourceID)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	default:
 		return failure(responseID, "unsupported-op", "unsupported UI control operation")
 	}
-	if !emptyObject(request.Arguments) {
-		return failure(responseID, "bad-arguments", "status.get requires empty args")
-	}
-
 	status.normalize()
 	if err := status.validate(); err != nil {
 		return failure(responseID, "internal", "controller status unavailable")
 	}
 	return Response{Version: Version, ID: responseID, OK: true, Result: &status}
+}
+
+func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		SourceID string `json:"source_id"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.SourceID) {
+		return "", errors.New("invalid card enrollment arguments")
+	}
+	return arguments.SourceID, nil
 }
 
 func decodeRequest(payload json.RawMessage) (Request, error) {
@@ -226,7 +270,8 @@ func (status Status) validate() error {
 		return errors.New("status exceeds row limits")
 	}
 	for _, card := range status.Cards {
-		if card.RetainedBytes < 0 || len(card.Issues) > 128 {
+		if card.ID == "" || !oneOf(card.State, "absent", "unenrolled", "enrolled", "invalid", "duplicate") ||
+			card.RetainedBytes < 0 || len(card.Issues) > 128 {
 			return errors.New("card status is outside protocol bounds")
 		}
 	}
