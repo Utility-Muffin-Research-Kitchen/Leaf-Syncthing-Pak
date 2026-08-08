@@ -224,6 +224,74 @@ func TestQROfferFragmentSingleUseAndSecondOfferInvalidatesFirst(t *testing.T) {
 	_ = replay.Body.Close()
 }
 
+func TestAdversarialBodiesAndMethodOverridesFailClosed(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	manager := testManager(t, &now)
+	status, err := manager.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := insecureClient()
+	csrf := bootstrapCSRF(t, client, status.URL)
+	paired := submitPair(t, client, status, csrf, map[string]string{"pin": status.PIN})
+	var trustCookie *http.Cookie
+	for _, cookie := range paired.Cookies() {
+		if cookie.Name == trustCookieName {
+			trustCookie = cookie
+		}
+	}
+	_ = paired.Body.Close()
+	if trustCookie == nil {
+		t.Fatal("pairing did not issue trust")
+	}
+
+	for _, test := range []struct {
+		name   string
+		method string
+		body   io.Reader
+		header http.Header
+		want   int
+	}{
+		{name: "get-body", method: http.MethodGet, body: strings.NewReader("mutation"), want: http.StatusBadRequest},
+		{name: "method-override", method: http.MethodGet, header: http.Header{"X-HTTP-Method-Override": []string{"DELETE"}}, want: http.StatusBadRequest},
+		{name: "connect", method: http.MethodConnect, want: http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, status.URL+"rest/config", test.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header = test.header
+			if request.Header == nil {
+				request.Header = make(http.Header)
+			}
+			request.AddCookie(trustCookie)
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != test.want {
+				t.Fatalf("status = %d, want %d", response.StatusCode, test.want)
+			}
+		})
+	}
+
+	oversized := bytes.NewReader(bytes.Repeat([]byte("x"), 4097))
+	request, _ := http.NewRequest(http.MethodPost, status.URL+"leaf/pair", oversized)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", strings.TrimSuffix(status.URL, "/"))
+	request.Header.Set("X-Leaf-CSRF", csrf)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized pairing status = %d", response.StatusCode)
+	}
+}
+
 func TestPairingExpiryRateLimitsAndExtensionLifetime(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	manager := testManager(t, &now)
@@ -231,12 +299,19 @@ func TestPairingExpiryRateLimitsAndExtensionLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	qrURL, _ := url.Parse(status.QRURL)
+	qrToken, _ := url.QueryUnescape(strings.TrimPrefix(qrURL.Fragment, "token="))
 	now = now.Add(pairingLifetime + time.Second)
 	request := directPairRequest(status, manager.controlCSRF, "192.0.2.1:1000", "0000")
 	recorder := httptest.NewRecorder()
 	manager.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expired PIN status = %d", recorder.Code)
+	}
+	recorder = httptest.NewRecorder()
+	manager.ServeHTTP(recorder, directTokenRequest(status, manager.controlCSRF, "192.0.2.3:1000", qrToken))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expired QR token status = %d", recorder.Code)
 	}
 
 	now = now.Add(time.Second)
@@ -284,6 +359,15 @@ func TestPairingExpiryRateLimitsAndExtensionLifetime(t *testing.T) {
 
 func directPairRequest(status Status, csrf, remote, pin string) *http.Request {
 	payload, _ := json.Marshal(map[string]string{"pin": pin})
+	return directPairingRequest(status, csrf, remote, payload)
+}
+
+func directTokenRequest(status Status, csrf, remote, token string) *http.Request {
+	payload, _ := json.Marshal(map[string]string{"token": token})
+	return directPairingRequest(status, csrf, remote, payload)
+}
+
+func directPairingRequest(status Status, csrf, remote string, payload []byte) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, status.URL+"leaf/pair", bytes.NewReader(payload))
 	request.Host = strings.TrimPrefix(strings.TrimSuffix(status.URL, "/"), "https://")
 	request.RemoteAddr = remote

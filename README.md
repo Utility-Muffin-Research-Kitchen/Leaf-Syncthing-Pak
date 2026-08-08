@@ -26,6 +26,13 @@ scripts/adb-mlp1-b1-card-safety.sh
 B1_MEASURE_SECONDS=600 scripts/adb-mlp1-b1-controller-smoke.sh
 ```
 
+After explicitly staging the B2 package and starting its service through
+Jawaka, exercise the real paired HTTPS boundary with:
+
+```sh
+ADB_SERIAL=serial scripts/adb-mlp1-b2-gateway-smoke.sh
+```
+
 The command downloads only the locked upstream release inputs, rejects an
 unexpected redirect host, verifies the release-key fingerprint and checksum
 signature, verifies the archive digest, checks the annotated tag's peeled
@@ -68,7 +75,7 @@ signer fingerprint and signatures, and checks every locked digest before the
 artifact can be packaged.
 Local tests expect `../umrk-workspace`; CI checks out the explicitly pinned
 contract revision beside this repository. `make test` runs all Go packages and
-the standalone C UI-protocol fixture check.
+the standalone C UI-protocol fixture and semantic-client checks.
 
 The UMRK controller and packaging code are MIT licensed. The bundled upstream
 Syncthing binary remains under MPL-2.0; both notices ship in the pak.
