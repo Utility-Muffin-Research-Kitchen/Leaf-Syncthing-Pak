@@ -44,67 +44,74 @@ func ApplyOfflinePauseSet(configDir string, desired map[string]bool, syncFilesys
 		}
 		return PauseEditResult{}, nil
 	}
+	verify := func(path string) error {
+		if err := ValidateXML(path); err != nil {
+			return err
+		}
+		return verifyPauseSet(path, desired)
+	}
+	if err := promoteConfig(configDir, rewritten, syncFilesystem, "offline pause edit", verify); err != nil {
+		return PauseEditResult{}, err
+	}
+	return PauseEditResult{Changed: true}, nil
+}
 
+func promoteConfig(configDir string, contents []byte, syncFilesystem SyncFilesystemFunc, operation string, verify func(string) error) error {
+	configPath := filepath.Join(configDir, "config.xml")
 	temporaryPath := filepath.Join(configDir, "config.xml.tmp")
 	backupPath := filepath.Join(configDir, "config.xml.bak")
 	if _, err := os.Lstat(temporaryPath); err == nil {
-		return PauseEditResult{}, errors.New("offline pause edit: stale config.xml.tmp requires recovery")
+		return fmt.Errorf("%s: stale config.xml.tmp requires recovery", operation)
 	} else if !os.IsNotExist(err) {
-		return PauseEditResult{}, err
+		return err
 	}
 	backupExists := false
 	if info, err := os.Lstat(backupPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return PauseEditResult{}, errors.New("offline pause edit: unsafe config.xml.bak")
+			return fmt.Errorf("%s: unsafe config.xml.bak", operation)
 		}
 		backupExists = true
 	} else if !os.IsNotExist(err) {
-		return PauseEditResult{}, err
+		return err
 	}
 
 	temporary, err := os.OpenFile(temporaryPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return PauseEditResult{}, fmt.Errorf("create offline config temporary: %w", err)
+		return fmt.Errorf("%s: create config temporary: %w", operation, err)
 	}
-	if _, err := temporary.Write(rewritten); err != nil {
+	if _, err := temporary.Write(contents); err != nil {
 		_ = temporary.Close()
-		return PauseEditResult{}, fmt.Errorf("write offline config temporary: %w", err)
+		return fmt.Errorf("%s: write config temporary: %w", operation, err)
 	}
 	if err := temporary.Sync(); err != nil {
 		_ = temporary.Close()
-		return PauseEditResult{}, fmt.Errorf("flush offline config temporary: %w", err)
+		return fmt.Errorf("%s: flush config temporary: %w", operation, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return PauseEditResult{}, fmt.Errorf("close offline config temporary: %w", err)
+		return fmt.Errorf("%s: close config temporary: %w", operation, err)
 	}
-	if err := ValidateXML(temporaryPath); err != nil {
-		return PauseEditResult{}, fmt.Errorf("validate offline config temporary: %w", err)
-	}
-	if err := verifyPauseSet(temporaryPath, desired); err != nil {
-		return PauseEditResult{}, err
+	if err := verify(temporaryPath); err != nil {
+		return fmt.Errorf("%s: validate config temporary: %w", operation, err)
 	}
 
 	if backupExists {
 		if err := os.Remove(backupPath); err != nil {
-			return PauseEditResult{}, fmt.Errorf("remove previous config backup: %w", err)
+			return fmt.Errorf("%s: remove previous config backup: %w", operation, err)
 		}
 	}
 	if err := os.Rename(configPath, backupPath); err != nil {
-		return PauseEditResult{}, fmt.Errorf("move known-good config to backup: %w", err)
+		return fmt.Errorf("%s: move known-good config to backup: %w", operation, err)
 	}
 	if err := os.Rename(temporaryPath, configPath); err != nil {
-		return PauseEditResult{}, fmt.Errorf("promote offline config temporary: %w", err)
+		return fmt.Errorf("%s: promote config temporary: %w", operation, err)
 	}
 	if err := syncFilesystem(configDir); err != nil {
-		return PauseEditResult{}, fmt.Errorf("flush offline config transaction: %w", err)
+		return fmt.Errorf("%s: flush config transaction: %w", operation, err)
 	}
-	if err := ValidateXML(configPath); err != nil {
-		return PauseEditResult{}, restoreBackup(configPath, temporaryPath, backupPath, configDir, syncFilesystem, err)
+	if err := verify(configPath); err != nil {
+		return restoreBackup(configPath, temporaryPath, backupPath, configDir, syncFilesystem, operation, err)
 	}
-	if err := verifyPauseSet(configPath, desired); err != nil {
-		return PauseEditResult{}, restoreBackup(configPath, temporaryPath, backupPath, configDir, syncFilesystem, err)
-	}
-	return PauseEditResult{Changed: true}, nil
+	return nil
 }
 
 func replaceManagedFolderPauses(contents []byte, desired map[string]bool) ([]byte, bool, error) {
@@ -281,21 +288,21 @@ func verifyPauseSet(path string, desired map[string]bool) error {
 	return nil
 }
 
-func restoreBackup(configPath, temporaryPath, backupPath, configDir string, syncFilesystem SyncFilesystemFunc, cause error) error {
+func restoreBackup(configPath, temporaryPath, backupPath, configDir string, syncFilesystem SyncFilesystemFunc, operation string, cause error) error {
 	_ = os.Remove(temporaryPath)
 	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("offline pause edit failed (%v) and bad config removal failed: %w", cause, err)
+		return fmt.Errorf("%s failed (%v) and bad config removal failed: %w", operation, cause, err)
 	}
 	if err := os.Rename(backupPath, configPath); err != nil {
-		return fmt.Errorf("offline pause edit failed (%v) and backup restore failed: %w", cause, err)
+		return fmt.Errorf("%s failed (%v) and backup restore failed: %w", operation, cause, err)
 	}
 	if err := syncFilesystem(configDir); err != nil {
-		return fmt.Errorf("offline pause edit failed (%v) and restored config flush failed: %w", cause, err)
+		return fmt.Errorf("%s failed (%v) and restored config flush failed: %w", operation, cause, err)
 	}
 	if err := ValidateXML(configPath); err != nil {
-		return fmt.Errorf("offline pause edit failed (%v) and restored config is invalid: %w", cause, err)
+		return fmt.Errorf("%s failed (%v) and restored config is invalid: %w", operation, cause, err)
 	}
-	return fmt.Errorf("offline pause edit rejected promoted config and restored backup: %w", cause)
+	return fmt.Errorf("%s rejected promoted config and restored backup: %w", operation, cause)
 }
 
 func readSafeConfig(path string) ([]byte, error) {

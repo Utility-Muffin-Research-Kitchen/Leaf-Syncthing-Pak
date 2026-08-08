@@ -200,6 +200,28 @@ stop_and_wait() {
     wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
 }
 
+downgrade_config_schema_fixture() {
+    local config_dir="$userdata/Syncthing/config"
+    local current older
+    current="$("${ADB[@]}" shell "sed -n 's/.*<configuration[^>]*version=\"\([0-9][0-9]*\)\".*/\1/p' '$config_dir/config.xml' | head -1" | tr -d '\r')"
+    if [[ ! "$current" =~ ^[0-9]+$ ]] || [ "$current" -le 1 ]; then
+        echo "could not read a migratable Syncthing config version: $current" >&2
+        exit 1
+    fi
+    older=$((current - 1))
+    "${ADB[@]}" shell "set -eu
+        sed 's/version=\"$current\"/version=\"$older\"/' '$config_dir/config.xml' >'$config_dir/config.xml.schema-test'
+        sed -e 's/\"upstream_version\":\"v2.1.2\"/\"upstream_version\":\"v2.1.1\"/' -e 's/\"config_version\":$current/\"config_version\":$older/' '$config_dir/.leaf-generation-v1' >'$config_dir/.leaf-generation-v1.schema-test'
+        grep -q 'version=\"$older\"' '$config_dir/config.xml.schema-test'
+        grep -q '\"upstream_version\":\"v2.1.1\"' '$config_dir/.leaf-generation-v1.schema-test'
+        grep -q '\"config_version\":$older' '$config_dir/.leaf-generation-v1.schema-test'
+        mv '$config_dir/config.xml.schema-test' '$config_dir/config.xml'
+        mv '$config_dir/.leaf-generation-v1.schema-test' '$config_dir/.leaf-generation-v1'
+        sync"
+    MIGRATION_CURRENT_VERSION="$current"
+    MIGRATION_OLD_VERSION="$older"
+}
+
 measure_idle() {
     local seconds="$1"
     if ! [[ "$seconds" =~ ^[0-9]+$ ]] || [ "$seconds" -le 0 ]; then
@@ -272,12 +294,18 @@ run_and_wait first-run
 measure_idle "$MEASURE_SECONDS"
 first_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
 stop_and_wait first-stop
+downgrade_config_schema_fixture
 run_and_wait second-run
 second_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
 if [ "$first_hashes" != "$second_hashes" ]; then
     echo "identity hashes changed across supervised restart" >&2
     exit 1
 fi
+"${ADB[@]}" shell "set -eu
+    grep -q 'version=\"$MIGRATION_CURRENT_VERSION\"' '$userdata/Syncthing/config/config.xml'
+    grep -q 'version=\"$MIGRATION_OLD_VERSION\"' '$userdata/Syncthing/config/config.xml.bak'
+    test ! -e '$userdata/Syncthing/config.migrate.tmp'
+    test ! -e '$userdata/Syncthing/data.migrate.tmp'"
 stop_and_wait second-stop
 
-echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable device/card identity, verified stop)"
+echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable device/card identity, disposable config migration, verified stop)"
