@@ -117,6 +117,20 @@ func TestRecoverConfigRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestRecoverConfigAcceptsAbsentFactoryConfigDirectory(t *testing.T) {
+	parent := t.TempDir()
+	result, err := RecoverConfig(filepath.Join(parent, "config"), func(string) error {
+		t.Fatal("absent factory config unexpectedly required syncfs")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != RecoveryClean || result.Changed {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestRecoverConfigConvergesAfterFlushFailure(t *testing.T) {
 	tests := []struct {
 		name      string

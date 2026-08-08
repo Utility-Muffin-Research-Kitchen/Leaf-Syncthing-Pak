@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	ServiceID      = "org.umrk.syncthing"
-	ServiceDirName = "org.umrk.syncthing"
-	ControllerLock = "controller.lock"
-	DefaultRetry   = time.Second
-	ServiceLeaseFD = 3
+	ServiceID             = "org.umrk.syncthing"
+	ServiceDirName        = "org.umrk.syncthing"
+	ControllerLock        = "controller.lock"
+	DefaultRetry          = time.Second
+	ServiceLeaseFD        = 3
+	PinnedUpstreamVersion = "v2.1.2"
 )
 
 var (
@@ -30,14 +31,17 @@ var (
 )
 
 type Config struct {
-	RuntimeDir   string
-	UserdataPath string
-	ConfigDir    string
-	DaemonSocket string
-	Mode         life1.Mode
-	AckMS        int
-	WaitMS       int
-	RetryDelay   time.Duration
+	RuntimeDir      string
+	UserdataPath    string
+	ConfigDir       string
+	DataDir         string
+	UpstreamBinary  string
+	UpstreamVersion string
+	DaemonSocket    string
+	Mode            life1.Mode
+	AckMS           int
+	WaitMS          int
+	RetryDelay      time.Duration
 }
 
 type Lifecycle interface {
@@ -46,17 +50,20 @@ type Lifecycle interface {
 
 type ConnectFunc func(context.Context, life1.Config) (Lifecycle, life1.GameState, error)
 type RecoverConfigFunc func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error)
+type EnsureIdentityFunc func(context.Context, syncthingconfig.IdentityOptions, syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error)
 
 type Runner struct {
-	Config  Config
-	Connect ConnectFunc
-	Recover RecoverConfigFunc
-	Logf    func(string, ...any)
+	Config         Config
+	Connect        ConnectFunc
+	Recover        RecoverConfigFunc
+	EnsureIdentity EnsureIdentityFunc
+	Logf           func(string, ...any)
 }
 
 type Session struct {
 	State     life1.GameState
 	Recovery  syncthingconfig.RecoveryResult
+	Identity  syncthingconfig.Identity
 	Lifecycle Lifecycle
 	lock      *os.File
 }
@@ -70,19 +77,26 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return Config{}, fmt.Errorf("locate controller executable: %w", err)
+	}
 	return Config{
-		RuntimeDir:   filepath.Join(environment.RuntimePath, "services", ServiceDirName),
-		UserdataPath: environment.UserdataPath,
-		ConfigDir:    filepath.Join(environment.StateDir(), "config"),
-		DaemonSocket: socket,
-		Mode:         life1.ModeNotify,
-		AckMS:        life1.DefaultAckMS,
-		WaitMS:       life1.DefaultWaitMS,
-		RetryDelay:   DefaultRetry,
+		RuntimeDir:      filepath.Join(environment.RuntimePath, "services", ServiceDirName),
+		UserdataPath:    environment.UserdataPath,
+		ConfigDir:       filepath.Join(environment.StateDir(), "config"),
+		DataDir:         filepath.Join(environment.StateDir(), "data"),
+		UpstreamBinary:  filepath.Join(filepath.Dir(executable), "syncthing"),
+		UpstreamVersion: PinnedUpstreamVersion,
+		DaemonSocket:    socket,
+		Mode:            life1.ModeNotify,
+		AckMS:           life1.DefaultAckMS,
+		WaitMS:          life1.DefaultWaitMS,
+		RetryDelay:      DefaultRetry,
 	}, nil
 }
 
-// Bootstrap implements the first four normative SYNC-1 startup steps. It
+// Bootstrap implements the first five normative SYNC-1 startup steps. It
 // returns with the singleton lock and LIFE-1 connection held so no caller can
 // accidentally spawn upstream outside their protection.
 func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
@@ -158,9 +172,21 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("recover upstream config: %w", err)
 	}
+	ensureIdentity := runner.EnsureIdentity
+	if ensureIdentity == nil {
+		ensureIdentity = syncthingconfig.EnsureIdentity
+	}
+	identity, err := ensureIdentity(ctx, syncthingconfig.IdentityOptions{
+		Binary: runner.Config.UpstreamBinary, ConfigDir: runner.Config.ConfigDir,
+		DataDir: runner.Config.DataDir, UpstreamVersion: runner.Config.UpstreamVersion,
+	}, recovery)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("ensure upstream identity: %w", err)
+	}
 
 	closeLock = false
-	return &Session{State: state, Recovery: recovery, Lifecycle: lifecycle, lock: lock}, nil
+	return &Session{State: state, Recovery: recovery, Identity: identity, Lifecycle: lifecycle, lock: lock}, nil
 }
 
 func (session *Session) Close() error {
@@ -180,8 +206,9 @@ func (session *Session) Close() error {
 }
 
 func (config Config) validate() error {
-	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DaemonSocket == "" {
-		return errors.New("leaf-syncthing: runtime, userdata, config, and daemon paths are required")
+	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
+		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.DaemonSocket == "" {
+		return errors.New("leaf-syncthing: runtime, userdata, config, data, upstream, and daemon values are required")
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {
 		return fmt.Errorf("leaf-syncthing: unsupported game mode %q", config.Mode)
@@ -229,10 +256,18 @@ func prepareDurableDirectories(userdataPath string) error {
 	if err := ensureOwnedDirectory(stateRoot, 0o700); err != nil {
 		return err
 	}
-	for _, name := range []string{"config", "data", "leaf", "backups"} {
+	for _, name := range []string{"data", "leaf", "backups"} {
 		if err := ensureOwnedDirectory(filepath.Join(stateRoot, name), 0o700); err != nil {
 			return err
 		}
+	}
+	configDir := filepath.Join(stateRoot, "config")
+	if info, err := os.Lstat(configDir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("validate owned directory %s: not a real directory", configDir)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("validate owned directory %s: %w", configDir, err)
 	}
 	return nil
 }

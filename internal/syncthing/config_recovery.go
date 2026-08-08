@@ -42,8 +42,15 @@ func RecoverConfig(configDir string, syncFilesystem SyncFilesystemFunc) (Recover
 	if syncFilesystem == nil {
 		syncFilesystem = syncFilesystemAt
 	}
-	if err := requireRealDirectory(configDir); err != nil {
-		return RecoveryResult{}, err
+	if info, err := os.Lstat(configDir); os.IsNotExist(err) {
+		if err := requireRealDirectory(filepath.Dir(configDir)); err != nil {
+			return RecoveryResult{}, fmt.Errorf("validate absent config parent: %w", err)
+		}
+		return RecoveryResult{State: RecoveryClean}, nil
+	} else if err != nil {
+		return RecoveryResult{}, fmt.Errorf("validate config directory: %w", err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return RecoveryResult{}, errors.New("validate config directory: not a real directory")
 	}
 
 	config, err := inspectXML(filepath.Join(configDir, "config.xml"))
@@ -135,6 +142,13 @@ func RecoverConfig(configDir string, syncFilesystem SyncFilesystemFunc) (Recover
 }
 
 func ValidateXML(path string) error {
+	linkInfo, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if linkInfo.Mode()&os.ModeSymlink != 0 || !linkInfo.Mode().IsRegular() {
+		return errors.New("config is not a real regular file")
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return err

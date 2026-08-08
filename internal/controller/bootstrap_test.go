@@ -25,7 +25,8 @@ func TestBootstrapOrdersLockDirectoriesAndLifecycle(t *testing.T) {
 	lifecycle := &fakeLifecycle{}
 	connectCalls := 0
 	runner := Runner{
-		Config: config,
+		Config:         config,
+		EnsureIdentity: successfulIdentity,
 		Connect: func(_ context.Context, got life1.Config) (Lifecycle, life1.GameState, error) {
 			connectCalls++
 			if got.SocketPath != config.DaemonSocket || got.ServiceID != ServiceID || got.Mode != life1.ModeNotify {
@@ -38,11 +39,14 @@ func TestBootstrapOrdersLockDirectoriesAndLifecycle(t *testing.T) {
 			if !errors.Is(err, ErrAlreadyRunning) {
 				t.Fatalf("singleton was not held before LIFE-1 connect: %v", err)
 			}
-			for _, name := range []string{"config", "data", "leaf", "backups"} {
+			for _, name := range []string{"data", "leaf", "backups"} {
 				path := filepath.Join(config.UserdataPath, leaf.AppStateName, name)
 				if info, err := os.Stat(path); err != nil || !info.IsDir() {
 					t.Fatalf("durable directory missing before LIFE-1 connect: %s", path)
 				}
+			}
+			if _, err := os.Lstat(config.ConfigDir); !os.IsNotExist(err) {
+				t.Fatalf("factory-clean config directory was created before generation: %v", err)
 			}
 			return lifecycle, life1.GameState{Active: false}, nil
 		},
@@ -74,7 +78,8 @@ func TestBootstrapRetriesUnavailableJawakaWithoutDroppingLock(t *testing.T) {
 	config.RetryDelay = time.Millisecond
 	calls := 0
 	runner := Runner{
-		Config: config,
+		Config:         config,
+		EnsureIdentity: successfulIdentity,
 		Connect: func(_ context.Context, _ life1.Config) (Lifecycle, life1.GameState, error) {
 			calls++
 			if calls == 1 {
@@ -109,6 +114,10 @@ func TestBootstrapModeStopExitsBeforeContinuation(t *testing.T) {
 			t.Fatal("config recovery ran during intentional mode-stop exit")
 			return syncthingconfig.RecoveryResult{}, nil
 		},
+		EnsureIdentity: func(context.Context, syncthingconfig.IdentityOptions, syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+			t.Fatal("identity generation ran during intentional mode-stop exit")
+			return syncthingconfig.Identity{}, nil
+		},
 	}
 	if _, err := runner.Bootstrap(context.Background()); !errors.Is(err, ErrLifecycleStop) {
 		t.Fatalf("Bootstrap() error = %v, want %v", err, ErrLifecycleStop)
@@ -136,6 +145,7 @@ func TestBootstrapQueriesLifecycleBeforeConfigRecovery(t *testing.T) {
 			}
 			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
 		},
+		EnsureIdentity: successfulIdentity,
 	}
 	session, err := runner.Bootstrap(context.Background())
 	if err != nil {
@@ -178,8 +188,17 @@ func testConfig(t *testing.T) Config {
 	}
 	return Config{
 		RuntimeDir: runtimeDir, UserdataPath: userdata,
-		ConfigDir:    filepath.Join(userdata, leaf.AppStateName, "config"),
-		DaemonSocket: filepath.Join(base, "jawakad.sock"),
-		Mode:         life1.ModeNotify, AckMS: life1.DefaultAckMS,
+		ConfigDir:       filepath.Join(userdata, leaf.AppStateName, "config"),
+		DataDir:         filepath.Join(userdata, leaf.AppStateName, "data"),
+		UpstreamBinary:  filepath.Join(base, "syncthing"),
+		UpstreamVersion: PinnedUpstreamVersion,
+		DaemonSocket:    filepath.Join(base, "jawakad.sock"),
+		Mode:            life1.ModeNotify, AckMS: life1.DefaultAckMS,
 	}
+}
+
+func successfulIdentity(_ context.Context, options syncthingconfig.IdentityOptions, recovery syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+	return syncthingconfig.Identity{
+		DeviceID: "fixture-device", UpstreamVersion: options.UpstreamVersion, ConfigVersion: 52,
+	}, nil
 }
