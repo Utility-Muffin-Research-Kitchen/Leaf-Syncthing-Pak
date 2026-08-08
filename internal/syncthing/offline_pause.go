@@ -17,8 +17,9 @@ type PauseEditResult struct {
 }
 
 // ApplyOfflinePauseSet is the only editor for a committed upstream config.
-// It changes only the <paused> scalar of explicitly managed folder IDs, then
-// promotes through config.xml.tmp/config.xml.bak with a filesystem-wide flush.
+// It changes the <paused> scalar of explicitly managed folder IDs and disables
+// Syncthing's self-set process group so Jawaka's reservation stays transitive,
+// then promotes through config.xml.tmp/config.xml.bak with a filesystem-wide flush.
 func ApplyOfflinePauseSet(configDir string, desired map[string]bool, syncFilesystem SyncFilesystemFunc) (PauseEditResult, error) {
 	if syncFilesystem == nil {
 		syncFilesystem = syncFilesystemAt
@@ -31,10 +32,17 @@ func ApplyOfflinePauseSet(configDir string, desired map[string]bool, syncFilesys
 	if err != nil {
 		return PauseEditResult{}, err
 	}
-	rewritten, changed, err := replaceManagedFolderPauses(contents, desired)
+	hardened, err := replaceXMLScalars(contents, []scalarReplacement{{
+		path: "configuration/options/setLowPriority", name: "setLowPriority", value: "false",
+	}})
 	if err != nil {
 		return PauseEditResult{}, err
 	}
+	rewritten, pauseChanged, err := replaceManagedFolderPauses(hardened, desired)
+	if err != nil {
+		return PauseEditResult{}, err
+	}
+	changed := !bytes.Equal(contents, hardened) || pauseChanged
 	if !changed {
 		if err := ValidateXML(configPath); err != nil {
 			return PauseEditResult{}, err
@@ -251,9 +259,6 @@ func consumeScalarText(decoder *xml.Decoder, start xml.StartElement) (xml.EndEle
 }
 
 func verifyPauseSet(path string, desired map[string]bool) error {
-	if len(desired) == 0 {
-		return nil
-	}
 	type folder struct {
 		ID     string `xml:"id,attr"`
 		Paused *bool  `xml:"paused"`
@@ -261,6 +266,9 @@ func verifyPauseSet(path string, desired map[string]bool) error {
 	var configuration struct {
 		XMLName xml.Name `xml:"configuration"`
 		Folders []folder `xml:"folder"`
+		Options struct {
+			SetLowPriority *bool `xml:"setLowPriority"`
+		} `xml:"options"`
 	}
 	contents, err := readSafeConfig(path)
 	if err != nil {
@@ -268,6 +276,9 @@ func verifyPauseSet(path string, desired map[string]bool) error {
 	}
 	if err := xml.Unmarshal(contents, &configuration); err != nil {
 		return err
+	}
+	if configuration.Options.SetLowPriority == nil || *configuration.Options.SetLowPriority {
+		return errors.New("offline pause edit: setLowPriority must be false")
 	}
 	found := make(map[string]bool, len(desired))
 	for _, folder := range configuration.Folders {

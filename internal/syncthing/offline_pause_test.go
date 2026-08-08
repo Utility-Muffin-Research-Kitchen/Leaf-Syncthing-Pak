@@ -10,7 +10,7 @@ import (
 func TestApplyOfflinePauseSetTransactionAndPreservation(t *testing.T) {
 	directory := t.TempDir()
 	configPath := filepath.Join(directory, "config.xml")
-	original := `<configuration version="52" future="kept"><folder id="managed-a"><paused>false</paused><future>kept-a</future></folder><folder id="managed-b"><future>kept-b</future></folder><folder id="unmanaged"><paused>false</paused><future>kept-u</future></folder><gui enabled="true"><apikey>secret</apikey></gui></configuration>`
+	original := `<configuration version="52" future="kept"><folder id="managed-a"><paused>false</paused><future>kept-a</future></folder><folder id="managed-b"><future>kept-b</future></folder><folder id="unmanaged"><paused>false</paused><future>kept-u</future></folder><gui enabled="true"><apikey>secret</apikey></gui><options><setLowPriority>true</setLowPriority></options></configuration>`
 	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestApplyOfflinePauseSetTransactionAndPreservation(t *testing.T) {
 func TestApplyOfflinePauseSetNoopReparsesWithoutTransaction(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "config.xml")
-	config := `<configuration version="52"><folder id="managed"><paused>true</paused></folder></configuration>`
+	config := `<configuration version="52"><folder id="managed"><paused>true</paused></folder><options><setLowPriority>false</setLowPriority></options></configuration>`
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,8 @@ func TestApplyOfflinePauseSetNoopReparsesWithoutTransaction(t *testing.T) {
 
 func TestApplyOfflinePauseSetRefusesMissingOrDuplicateManagedFolder(t *testing.T) {
 	for name, config := range map[string]string{
-		"missing":   `<configuration version="52"><folder id="other"><paused>false</paused></folder></configuration>`,
-		"duplicate": `<configuration version="52"><folder id="managed"></folder><folder id="managed"></folder></configuration>`,
+		"missing":   `<configuration version="52"><folder id="other"><paused>false</paused></folder><options><setLowPriority>false</setLowPriority></options></configuration>`,
+		"duplicate": `<configuration version="52"><folder id="managed"></folder><folder id="managed"></folder><options><setLowPriority>false</setLowPriority></options></configuration>`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()

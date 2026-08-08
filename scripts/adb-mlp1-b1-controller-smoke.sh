@@ -11,6 +11,7 @@ MEASURE_SECONDS="${B1_MEASURE_SECONDS:-0}"
 LIVE_PANGU_PID=""
 TEST_DAEMON_PID=""
 FOREIGN_SYNCTHING_PID=""
+WORKLOAD_WRITER_PID=""
 REMOTE_CARD_MOUNTED=0
 
 if [[ ! "$REMOTE_DIR" =~ ^/tmp/leaf-syncthing-b1-[A-Za-z0-9._/-]+$ ]] ||
@@ -60,7 +61,7 @@ cp -f "$ROOT_DIR/build/mlp1/bin/leaf-syncthing" \
     "$ROOT_DIR/build/mlp1/package/Syncthing.pak/bin/syncthing" \
     "$BUNDLE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/"
 printf '%s\n' \
-    '{"id":"org.umrk.syncthing","name":"Syncthing B1 Device Fixture","platform":"mlp1","pak_version":"0.0.0-b1","service":{"schema":1,"id":"org.umrk.syncthing","run":{"path":"bin/leaf-syncthing","args":["service","run"]},"restart":"no","default_enabled":false,"stop_grace_ms":10000,"lifecycle":{"game":"notify","stop_on_storage_change":true,"stop_on_suspend":true}},"state":{"root":"Syncthing","revoke_on_uninstall":["leaf/trusted-clients.json"],"retained_roots":["Syncthing"]}}' \
+    '{"id":"org.umrk.syncthing","name":"Syncthing B1 Device Fixture","platform":"mlp1","pak_version":"0.0.0-b1","service":{"schema":1,"id":"org.umrk.syncthing","run":{"path":"bin/leaf-syncthing","args":["service","run"]},"restart":"on-failure","default_enabled":false,"stop_grace_ms":10000,"lifecycle":{"game":"notify","stop_on_storage_change":true,"stop_on_suspend":true}},"state":{"root":"Syncthing","revoke_on_uninstall":["leaf/trusted-clients.json"],"retained_roots":["Syncthing"]}}' \
     >"$BUNDLE_DIR/sd/Apps/mlp1/Syncthing.pak/pak.json"
 printf '%s\n' '{"version":2,"platform":"mlp1","systems":[]}' \
     >"$BUNDLE_DIR/sd/.system/leaf/platforms/mlp1/defaults/systems.json"
@@ -94,9 +95,17 @@ cleanup_foreign_syncthing() {
     FOREIGN_SYNCTHING_PID=""
 }
 
+cleanup_workload_writer() {
+    if [ -n "${WORKLOAD_WRITER_PID:-}" ]; then
+        "${ADB[@]}" shell "kill '$WORKLOAD_WRITER_PID' 2>/dev/null || true"
+        WORKLOAD_WRITER_PID=""
+    fi
+}
+
 cleanup() {
     status=$?
     set +e
+    cleanup_workload_writer
     cleanup_foreign_syncthing
     cleanup_test_daemon
     if [ "$status" -ne 0 ]; then
@@ -136,25 +145,30 @@ state="$REMOTE_DIR/state"
 logs="$REMOTE_DIR/logs"
 socket="$runtime/jawakad.sock"
 "${ADB[@]}" shell "mkdir -p '$runtime' '$userdata' '$shared_userdata' '$state' '$logs'"
-"${ADB[@]}" shell "(cd '$REMOTE_DIR' && exec env \
-    UMRK_ENV_VERSION=2 PLATFORM=mlp1 \
-    SDCARD_PATH='$REMOTE_DIR/sd' SDCARD_PATHS='$REMOTE_DIR/sd' \
-    ROMS_PATH='$REMOTE_DIR/sd/Roms' ROMS_PATHS='$REMOTE_DIR/sd/Roms' \
-    IMAGES_PATH='$REMOTE_DIR/sd/Images' IMAGES_PATHS='$REMOTE_DIR/sd/Images' \
-    APPS_PATH='$REMOTE_DIR/sd/Apps' APPS_PATHS='$REMOTE_DIR/sd/Apps' \
-    USERDATA_PATH='$userdata' USERDATA_PATHS='$userdata' \
-    SHARED_USERDATA_PATH='$shared_userdata' SHARED_USERDATA_PATHS='$shared_userdata' \
-    LOGS_PATH='$logs' MUSIC_PATH='$REMOTE_DIR/sd/Music' MUSIC_PATHS='$REMOTE_DIR/sd/Music' \
-    VIDEO_PATH='$REMOTE_DIR/sd/Videos' VIDEO_PATHS='$REMOTE_DIR/sd/Videos' \
-    BIOS_PATH='$REMOTE_DIR/sd/BIOS' BIOS_PATHS='$REMOTE_DIR/sd/BIOS' \
-    SAVES_PATH='$REMOTE_DIR/sd/Saves' SAVES_PATHS='$REMOTE_DIR/sd/Saves' \
-    STATES_PATH='$REMOTE_DIR/sd/States' STATES_PATHS='$REMOTE_DIR/sd/States' \
-    CHEATS_PATH='$REMOTE_DIR/sd/Cheats' CHEATS_PATHS='$REMOTE_DIR/sd/Cheats' \
-    UMRK_PLATFORM_PATH='$REMOTE_DIR/sd/.system/leaf/platforms/mlp1' \
-    UMRK_RUNTIME_PATH='$runtime' JAWAKA_RUNTIME_DIR='$runtime' UMRK_DAEMON_SOCKET='$socket' \
-    UMRK_INTERNAL_DATA_PATH='$state' JAWAKA_SDCARD_ROOT='$REMOTE_DIR/sd' \
-    '$REMOTE_DIR/bin/jawakad' --daemon-only) </dev/null >'$logs/jawakad.log' 2>&1 & echo \$! >'$REMOTE_DIR/daemon.pid'"
-TEST_DAEMON_PID="$("${ADB[@]}" shell "cat '$REMOTE_DIR/daemon.pid'" | tr -d '\r')"
+
+start_test_daemon() {
+    "${ADB[@]}" shell "rm -f '$socket'; (cd '$REMOTE_DIR' && exec env \
+        UMRK_ENV_VERSION=2 PLATFORM=mlp1 \
+        SDCARD_PATH='$REMOTE_DIR/sd' SDCARD_PATHS='$REMOTE_DIR/sd' \
+        ROMS_PATH='$REMOTE_DIR/sd/Roms' ROMS_PATHS='$REMOTE_DIR/sd/Roms' \
+        IMAGES_PATH='$REMOTE_DIR/sd/Images' IMAGES_PATHS='$REMOTE_DIR/sd/Images' \
+        APPS_PATH='$REMOTE_DIR/sd/Apps' APPS_PATHS='$REMOTE_DIR/sd/Apps' \
+        USERDATA_PATH='$userdata' USERDATA_PATHS='$userdata' \
+        SHARED_USERDATA_PATH='$shared_userdata' SHARED_USERDATA_PATHS='$shared_userdata' \
+        LOGS_PATH='$logs' MUSIC_PATH='$REMOTE_DIR/sd/Music' MUSIC_PATHS='$REMOTE_DIR/sd/Music' \
+        VIDEO_PATH='$REMOTE_DIR/sd/Videos' VIDEO_PATHS='$REMOTE_DIR/sd/Videos' \
+        BIOS_PATH='$REMOTE_DIR/sd/BIOS' BIOS_PATHS='$REMOTE_DIR/sd/BIOS' \
+        SAVES_PATH='$REMOTE_DIR/sd/Saves' SAVES_PATHS='$REMOTE_DIR/sd/Saves' \
+        STATES_PATH='$REMOTE_DIR/sd/States' STATES_PATHS='$REMOTE_DIR/sd/States' \
+        CHEATS_PATH='$REMOTE_DIR/sd/Cheats' CHEATS_PATHS='$REMOTE_DIR/sd/Cheats' \
+        UMRK_PLATFORM_PATH='$REMOTE_DIR/sd/.system/leaf/platforms/mlp1' \
+        UMRK_RUNTIME_PATH='$runtime' JAWAKA_RUNTIME_DIR='$runtime' UMRK_DAEMON_SOCKET='$socket' \
+        UMRK_INTERNAL_DATA_PATH='$state' JAWAKA_SDCARD_ROOT='$REMOTE_DIR/sd' \
+        '$REMOTE_DIR/bin/jawakad' --daemon-only) </dev/null >>'$logs/jawakad.log' 2>&1 & echo \$! >'$REMOTE_DIR/daemon.pid'"
+    TEST_DAEMON_PID="$("${ADB[@]}" shell "cat '$REMOTE_DIR/daemon.pid'" | tr -d '\r')"
+}
+
+start_test_daemon
 
 wait_remote() {
     local command="$1"
@@ -205,6 +219,7 @@ run_and_wait() {
     "${ADB[@]}" shell "awk '\$2 ~ /:20C0\$/ && \$4 == \"0A\" { found=1 } END { exit found ? 1 : 0 }' /proc/net/tcp /proc/net/tcp6"
     "${ADB[@]}" shell "ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' | grep -v grep >/dev/null"
     "${ADB[@]}" shell "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' | grep -v grep | wc -l)\" -eq 2"
+    "${ADB[@]}" shell "controller=\$(ps -eo pid,comm,args | awk -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' '\$2 == \"leaf-syncthing\" && index(\$0, needle) { print \$1; exit }'); test \"\$(ps -eo pgid,comm,args | awk -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/' -v group=\"\$controller\" '(\$2 == \"leaf-syncthing\" || \$2 == \"syncthing\") && index(\$0, needle) && \$1 == group { count++ } END { print count+0 }')\" -eq 3"
 }
 
 stop_and_wait() {
@@ -215,6 +230,131 @@ stop_and_wait() {
     wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"status\",\"id\":\"stopped\",\"service_id\":\"$SERVICE_ID\"}' | grep -E '\"effective_state\":\"(stopped|disabled)\"'" 500
     wait_remote "! ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/' | grep -v grep" 500
     wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
+}
+
+generation_pids() {
+    "${ADB[@]}" shell "set -eu
+        controller=\$(ps -eo pid,ppid,comm,args | awk -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' '\$3 == \"leaf-syncthing\" && index(\$0, needle) { print \$1; exit }')
+        monitor=\$(ps -eo pid,ppid,comm,args | awk -v parent=\"\$controller\" -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' '\$2 == parent && \$3 == \"syncthing\" && index(\$0, needle) { print \$1; exit }')
+        main=\$(ps -eo pid,ppid,comm,args | awk -v parent=\"\$monitor\" -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' '\$2 == parent && \$3 == \"syncthing\" && index(\$0, needle) { print \$1; exit }')
+        test -n \"\$controller\" -a -n \"\$monitor\" -a -n \"\$main\"
+        test \"\$(awk '{ print \$5 }' /proc/\$controller/stat)\" = \"\$controller\"
+        test \"\$(awk '{ print \$5 }' /proc/\$monitor/stat)\" = \"\$controller\"
+        test \"\$(awk '{ print \$5 }' /proc/\$main/stat)\" = \"\$controller\"
+        echo \"\$controller \$monitor \$main\"" | tr -d '\r'
+}
+
+wait_generation_absent_without_overlap() {
+    local old_controller="$1" old_monitor="$2" old_main="$3"
+    local observation
+    for _ in $(seq 1 800); do
+        observation="$("${ADB[@]}" shell "old=0; for process in '$old_controller' '$old_monitor' '$old_main'; do kill -0 \"\$process\" 2>/dev/null && old=1; done; new=\$(ps -eo pid,comm,args | awk -v old='$old_controller' -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' '\$1 != old && \$2 == \"leaf-syncthing\" && index(\$0, needle) { count++ } END { print count+0 }'); echo \"\$old \$new\"" | tr -d '\r')"
+        if [ "$observation" = "0 0" ] || [ "$observation" = "0 1" ]; then
+            return 0
+        fi
+        if [ "$observation" != "1 0" ]; then
+            echo "replacement controller overlapped old generation: $observation" >&2
+            return 1
+        fi
+        sleep 0.05
+    done
+    echo "old generation remained after guardian deadline" >&2
+    return 1
+}
+
+wait_replacement_generation() {
+    local old_controller="$1"
+    wait_remote "controller=\$(ps -eo pid,comm,args | awk -v old='$old_controller' -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' '\$1 != old && \$2 == \"leaf-syncthing\" && index(\$0, needle) { print \$1; exit }'); test -n \"\$controller\"; test \"\$(ps -eo pgid,comm,args | awk -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/' -v group=\"\$controller\" '(\$2 == \"leaf-syncthing\" || \$2 == \"syncthing\") && index(\$0, needle) && \$1 == group { count++ } END { print count+0 }')\" -eq 3" 800
+    wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"status\",\"id\":\"replacement\",\"service_id\":\"$SERVICE_ID\"}' | grep -F '\"effective_state\":\"running\"'" 800
+}
+
+prepare_scan_workload() {
+    echo "Preparing isolated active-scan workload"
+    "${ADB[@]}" shell "set -eu
+        rm -rf '$REMOTE_DIR/sd/Saves/.stfolder' '$REMOTE_DIR/sd/Saves/b1-guardian-workload'
+        mkdir -p '$REMOTE_DIR/sd/Saves/b1-guardian-workload'
+        index=0
+        while [ \"\$index\" -lt 2000 ]; do
+            printf 'seed-%s\n' \"\$index\" >'$REMOTE_DIR/sd/Saves/b1-guardian-workload/item-'\"\$index\"
+            index=\$((index + 1))
+        done"
+}
+
+activate_scan_workload() {
+    local main_pid="$1" start_ticks
+    cleanup_workload_writer
+    "${ADB[@]}" shell "'$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' cli -C '$userdata/Syncthing/config' -D '$userdata/Syncthing/data' config folders '$TEST_FOLDER_ID' paused set false >/dev/null"
+    "${ADB[@]}" shell "(index=0; while [ \"\$index\" -lt 50000 ]; do slot=\$((index % 2000)); printf 'change-%s\n' \"\$index\" >'$REMOTE_DIR/sd/Saves/b1-guardian-workload/item-'\"\$slot\"; index=\$((index + 1)); done) </dev/null >/dev/null 2>&1 & echo \$! >'$REMOTE_DIR/workload-writer.pid'"
+    WORKLOAD_WRITER_PID="$("${ADB[@]}" shell "cat '$REMOTE_DIR/workload-writer.pid'" | tr -d '\r')"
+    start_ticks="$("${ADB[@]}" shell "awk '{ print \$14 + \$15 }' '/proc/$main_pid/stat'" | tr -d '\r')"
+    wait_remote "test \$((\$(awk '{ print \$14 + \$15 }' '/proc/$main_pid/stat') - $start_ticks)) -ge 3" 400
+}
+
+verify_controller_death_cleanup() {
+    local old_controller old_monitor old_main replacement
+    echo "Exercising controller death under live Jawaka"
+    run_and_wait controller-death-run
+    read -r old_controller old_monitor old_main <<<"$(generation_pids)"
+    activate_scan_workload "$old_main"
+    "${ADB[@]}" shell "kill -KILL '$old_controller'"
+    cleanup_workload_writer
+    wait_generation_absent_without_overlap "$old_controller" "$old_monitor" "$old_main"
+    wait_replacement_generation "$old_controller"
+    replacement="$(generation_pids)"
+    [ "${replacement%% *}" != "$old_controller" ]
+    stop_and_wait controller-death-stop
+}
+
+verify_monitor_death_cleanup() {
+    local old_controller old_monitor old_main replacement
+    echo "Exercising direct monitor death under live Jawaka"
+    run_and_wait monitor-death-run
+    read -r old_controller old_monitor old_main <<<"$(generation_pids)"
+    activate_scan_workload "$old_main"
+    "${ADB[@]}" shell "kill -KILL '$old_monitor'"
+    cleanup_workload_writer
+    wait_generation_absent_without_overlap "$old_controller" "$old_monitor" "$old_main"
+    wait_replacement_generation "$old_controller"
+    replacement="$(generation_pids)"
+    [ "${replacement%% *}" != "$old_controller" ]
+    stop_and_wait monitor-death-stop
+}
+
+verify_daemon_death_guardian() {
+    local old_controller old_monitor old_main gui_inode stale_response stale_status disable_response run_response replacement
+    echo "Exercising Jawaka death/restart and generation-lease guardian"
+    run_and_wait daemon-death-run
+    read -r old_controller old_monitor old_main <<<"$(generation_pids)"
+    activate_scan_workload "$old_main"
+    gui_inode="$("${ADB[@]}" shell "stat -c %i '$runtime/services/$SERVICE_ID/syncthing-gui.sock'" | tr -d '\r')"
+    "${ADB[@]}" shell "'$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' cli -C '$userdata/Syncthing/config' -D '$userdata/Syncthing/data' config gui enabled set false >/dev/null"
+    wait_remote "test \"\$(stat -c %i '$runtime/services/$SERVICE_ID/syncthing-gui.sock')\" != '$gui_inode'" 400
+    "${ADB[@]}" shell "rm '$runtime/services/$SERVICE_ID/syncthing-gui.sock'; kill -KILL '$TEST_DAEMON_PID'"
+    TEST_DAEMON_PID=""
+    start_test_daemon
+    wait_remote "test -S '$socket'" 400
+    wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"list\",\"id\":\"rediscover\"}' | grep -F '$SERVICE_ID'" 400
+    "${ADB[@]}" shell "test \"\$(readlink '/proc/$old_controller/fd/3')\" = '$runtime/services/$SERVICE_ID/generation.lease'; kill -0 '$old_monitor'; kill -0 '$old_main'"
+    stale_response="$(request '{"v":1,"op":"run","id":"stale-generation-run","service_id":"org.umrk.syncthing"}')"
+    grep -F 'stale-generation' <<<"$stale_response" >/dev/null
+    stale_status="$(request '{"v":1,"op":"status","id":"stale-generation-status","service_id":"org.umrk.syncthing"}')"
+    grep -F '"effective_state":"stale-generation"' <<<"$stale_status" >/dev/null
+    disable_response="$(request '{"v":1,"op":"disable","id":"clear-stale-run","service_id":"org.umrk.syncthing"}')"
+    grep -F '"ok":true' <<<"$disable_response" >/dev/null
+    "${ADB[@]}" shell "test \"\$(ps -eo comm,args | awk -v needle='$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' '\$1 == \"leaf-syncthing\" && index(\$0, needle) { count++ } END { print count+0 }')\" -eq 1"
+    cleanup_workload_writer
+    wait_generation_absent_without_overlap "$old_controller" "$old_monitor" "$old_main"
+    "${ADB[@]}" shell "set -eu
+        sed 's/<gui enabled=\"false\"/<gui enabled=\"true\"/' '$userdata/Syncthing/config/config.xml' >'$userdata/Syncthing/config/config.xml.guardian-test'
+        grep -q '<gui enabled=\"true\"' '$userdata/Syncthing/config/config.xml.guardian-test'
+        mv '$userdata/Syncthing/config/config.xml.guardian-test' '$userdata/Syncthing/config/config.xml'
+        sync"
+    run_response="$(request '{"v":1,"op":"run","id":"post-guardian-run","service_id":"org.umrk.syncthing"}')"
+    grep -F '"ok":true' <<<"$run_response" >/dev/null
+    wait_replacement_generation "$old_controller"
+    replacement="$(generation_pids)"
+    [ "${replacement%% *}" != "$old_controller" ]
+    stop_and_wait daemon-death-stop
 }
 
 verify_foreign_syncthing_conflict() {
@@ -385,4 +525,9 @@ grep -F '"code":"foreign-folder-manager"' <<<"$folder_status" >/dev/null
 grep -F '"state":"error"' <<<"$folder_status" >/dev/null
 stop_and_wait foreign-marker-stop
 
-echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable identity, disposable config migration, managed-folder pause/marker reporting, verified stop)"
+prepare_scan_workload
+verify_controller_death_cleanup
+verify_monitor_death_cleanup
+verify_daemon_death_guardian
+
+echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable identity, disposable config migration, managed-folder pause/marker reporting, transitive guardian/restart safety)"

@@ -46,6 +46,7 @@ func ApplyInitialProfile(configPath, guiSocket string) error {
 		{path: "configuration/options/autoUpgradeIntervalH", name: "autoUpgradeIntervalH", value: "0"},
 		{path: "configuration/options/startBrowser", name: "startBrowser", value: "false"},
 		{path: "configuration/options/crashReportingEnabled", name: "crashReportingEnabled", value: "false"},
+		{path: "configuration/options/setLowPriority", name: "setLowPriority", value: "false"},
 	}
 	rewritten, err := replaceXMLScalars(contents, replacements)
 	if err != nil {

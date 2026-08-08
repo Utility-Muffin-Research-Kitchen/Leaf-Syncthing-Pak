@@ -69,6 +69,7 @@ type parsedConfig struct {
 		AutoUpgradeHours int  `xml:"autoUpgradeIntervalH"`
 		StartBrowser     bool `xml:"startBrowser"`
 		CrashReporting   bool `xml:"crashReportingEnabled"`
+		SetLowPriority   bool `xml:"setLowPriority"`
 	} `xml:"options"`
 	Devices []struct {
 		ID string `xml:"id,attr"`

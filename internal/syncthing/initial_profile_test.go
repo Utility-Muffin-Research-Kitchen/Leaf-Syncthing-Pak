@@ -14,7 +14,7 @@ func TestApplyInitialProfilePreservesUnknownXML(t *testing.T) {
 	input := `<?xml version="1.0"?><configuration version="52" future="kept">
 <!--keep-comment--><device id="` + testDeviceID + `"><future-device value="kept"/></device>
 <gui enabled="true"><address>127.0.0.1:8384</address><apikey>secret</apikey><future-gui>kept</future-gui></gui>
-<options><globalAnnounceEnabled>true</globalAnnounceEnabled><localAnnounceEnabled>false</localAnnounceEnabled><relaysEnabled>true</relaysEnabled><natEnabled>true</natEnabled><urAccepted>0</urAccepted><autoUpgradeIntervalH>12</autoUpgradeIntervalH><startBrowser>true</startBrowser><crashReportingEnabled>true</crashReportingEnabled><future-option attr="kept">value</future-option></options>
+<options><globalAnnounceEnabled>true</globalAnnounceEnabled><localAnnounceEnabled>false</localAnnounceEnabled><relaysEnabled>true</relaysEnabled><natEnabled>true</natEnabled><urAccepted>0</urAccepted><autoUpgradeIntervalH>12</autoUpgradeIntervalH><startBrowser>true</startBrowser><crashReportingEnabled>true</crashReportingEnabled><setLowPriority>true</setLowPriority><future-option attr="kept">value</future-option></options>
 <future-root attr="kept">value</future-root></configuration>`
 	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestApplyInitialProfilePreservesUnknownXML(t *testing.T) {
 	}
 	if configuration.Options.GlobalAnnounce || !configuration.Options.LocalAnnounce || configuration.Options.Relays ||
 		configuration.Options.NAT || configuration.Options.URAccepted != -1 || configuration.Options.AutoUpgradeHours != 0 ||
-		configuration.Options.StartBrowser || configuration.Options.CrashReporting {
+		configuration.Options.StartBrowser || configuration.Options.CrashReporting || configuration.Options.SetLowPriority {
 		t.Fatalf("options = %+v", configuration.Options)
 	}
 	var generic any
