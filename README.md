@@ -25,7 +25,7 @@ commit, and inspects the archive layout without extracting it.
 The current package is intentionally labeled `0.0.0-b0a`: it contains the
 verified upstream binary and the read-only HTTPS gateway qualification spike,
 plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
-the first five ordered controller startup steps (including recoverable
+the first six ordered controller startup steps (including recoverable
 three-file config recovery and same-filesystem identity generation/promotion),
 the token-preserving private-socket/LAN-only initial profile, and canonical
 cross-language fixture tests, but not the production upstream runner or

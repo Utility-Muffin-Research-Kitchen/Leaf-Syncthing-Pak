@@ -27,6 +27,7 @@ func TestBootstrapOrdersLockDirectoriesAndLifecycle(t *testing.T) {
 	runner := Runner{
 		Config:         config,
 		EnsureIdentity: successfulIdentity,
+		ApplyPause:     successfulPause,
 		Connect: func(_ context.Context, got life1.Config) (Lifecycle, life1.GameState, error) {
 			connectCalls++
 			if got.SocketPath != config.DaemonSocket || got.ServiceID != ServiceID || got.Mode != life1.ModeNotify {
@@ -80,6 +81,7 @@ func TestBootstrapRetriesUnavailableJawakaWithoutDroppingLock(t *testing.T) {
 	runner := Runner{
 		Config:         config,
 		EnsureIdentity: successfulIdentity,
+		ApplyPause:     successfulPause,
 		Connect: func(_ context.Context, _ life1.Config) (Lifecycle, life1.GameState, error) {
 			calls++
 			if calls == 1 {
@@ -118,6 +120,10 @@ func TestBootstrapModeStopExitsBeforeContinuation(t *testing.T) {
 			t.Fatal("identity generation ran during intentional mode-stop exit")
 			return syncthingconfig.Identity{}, nil
 		},
+		ApplyPause: func(string, map[string]bool, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error) {
+			t.Fatal("offline pause edit ran during intentional mode-stop exit")
+			return syncthingconfig.PauseEditResult{}, nil
+		},
 	}
 	if _, err := runner.Bootstrap(context.Background()); !errors.Is(err, ErrLifecycleStop) {
 		t.Fatalf("Bootstrap() error = %v, want %v", err, ErrLifecycleStop)
@@ -146,6 +152,7 @@ func TestBootstrapQueriesLifecycleBeforeConfigRecovery(t *testing.T) {
 			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
 		},
 		EnsureIdentity: successfulIdentity,
+		ApplyPause:     successfulPause,
 	}
 	session, err := runner.Bootstrap(context.Background())
 	if err != nil {
@@ -202,4 +209,8 @@ func successfulIdentity(_ context.Context, options syncthingconfig.IdentityOptio
 	return syncthingconfig.Identity{
 		DeviceID: "fixture-device", UpstreamVersion: options.UpstreamVersion, ConfigVersion: 52,
 	}, nil
+}
+
+func successfulPause(string, map[string]bool, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error) {
+	return syncthingconfig.PauseEditResult{}, nil
 }

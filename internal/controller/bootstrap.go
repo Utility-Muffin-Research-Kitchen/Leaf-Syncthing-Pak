@@ -52,12 +52,14 @@ type Lifecycle interface {
 type ConnectFunc func(context.Context, life1.Config) (Lifecycle, life1.GameState, error)
 type RecoverConfigFunc func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error)
 type EnsureIdentityFunc func(context.Context, syncthingconfig.IdentityOptions, syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error)
+type ApplyPauseFunc func(string, map[string]bool, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error)
 
 type Runner struct {
 	Config         Config
 	Connect        ConnectFunc
 	Recover        RecoverConfigFunc
 	EnsureIdentity EnsureIdentityFunc
+	ApplyPause     ApplyPauseFunc
 	Logf           func(string, ...any)
 }
 
@@ -65,6 +67,7 @@ type Session struct {
 	State     life1.GameState
 	Recovery  syncthingconfig.RecoveryResult
 	Identity  syncthingconfig.Identity
+	PauseEdit syncthingconfig.PauseEditResult
 	Lifecycle Lifecycle
 	lock      *os.File
 }
@@ -98,7 +101,7 @@ func LoadConfig() (Config, error) {
 	}, nil
 }
 
-// Bootstrap implements the first five normative SYNC-1 startup steps. It
+// Bootstrap implements the first six normative SYNC-1 startup steps. It
 // returns with the singleton lock and LIFE-1 connection held so no caller can
 // accidentally spawn upstream outside their protection.
 func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
@@ -187,9 +190,21 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("ensure upstream identity: %w", err)
 	}
+	applyPause := runner.ApplyPause
+	if applyPause == nil {
+		applyPause = syncthingconfig.ApplyOfflinePauseSet
+	}
+	pauseEdit, err := applyPause(runner.Config.ConfigDir, nil, nil)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("apply offline pause set: %w", err)
+	}
 
 	closeLock = false
-	return &Session{State: state, Recovery: recovery, Identity: identity, Lifecycle: lifecycle, lock: lock}, nil
+	return &Session{
+		State: state, Recovery: recovery, Identity: identity, PauseEdit: pauseEdit,
+		Lifecycle: lifecycle, lock: lock,
+	}, nil
 }
 
 func (session *Session) Close() error {
