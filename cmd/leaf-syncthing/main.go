@@ -41,19 +41,7 @@ func run(arguments []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	session, err := (controller.Runner{Config: config, Logf: log.Printf}).Bootstrap(ctx)
-	if err != nil {
-		if errors.Is(err, controller.ErrLifecycleStop) {
-			return nil
-		}
-		return err
-	}
-	defer session.Close()
-
-	// The package launcher still rejects this B1 development artifact. Keeping
-	// the fail-closed boundary here prevents an upstream process from appearing
-	// before config recovery/generation and offline pause editing are complete.
-	return controller.ErrB1Incomplete
+	return (controller.Runner{Config: config, Logf: log.Printf}).Run(ctx)
 }
 
 func doctor() error {

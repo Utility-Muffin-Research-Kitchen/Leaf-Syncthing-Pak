@@ -3,11 +3,13 @@ package syncthing
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testDeviceID = "J5FPDWX-3DWTAGS-6V5DOUL-F66RROL-MC4S7KR-CZTY353-6VLPHUJ-QN7ULA6"
@@ -185,9 +187,10 @@ func TestEnsureIdentityRefusesExistingFactoryConfig(t *testing.T) {
 	}
 }
 
-// TestDeviceFactoryIdentity is an opt-in MLP1 fixture. It exercises the real
-// pinned binary and real syncfs barriers on the card selected by the caller.
-func TestDeviceFactoryIdentity(t *testing.T) {
+// TestDeviceFactoryIdentityAndProcess is an opt-in MLP1 fixture. It exercises
+// the real pinned binary, card syncfs barriers, private GUI readiness, and
+// verified upstream shutdown on the card selected by the caller.
+func TestDeviceFactoryIdentityAndProcess(t *testing.T) {
 	root := os.Getenv("LEAF_SYNCTHING_DEVICE_TEST_ROOT")
 	binary := os.Getenv("LEAF_SYNCTHING_DEVICE_BINARY")
 	if root == "" && binary == "" {
@@ -210,10 +213,19 @@ func TestDeviceFactoryIdentity(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "data"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	runtimeDir := filepath.Join(os.TempDir(), "leaf-syncthing-identity-device-runtime")
+	if err := os.RemoveAll(runtimeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	guiSocket := filepath.Join(runtimeDir, "syncthing-gui.sock")
 	options := IdentityOptions{
 		Binary: binary, ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
-		GUISocket: "/tmp/leaf-syncthing-identity-device-test/syncthing-gui.sock",
+		GUISocket: guiSocket,
 	}
 	generated, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean})
 	if err != nil {
@@ -225,6 +237,19 @@ func TestDeviceFactoryIdentity(t *testing.T) {
 	}
 	if generated != validated || generated.ConfigVersion <= 0 || !deviceIDPattern.MatchString(generated.DeviceID) {
 		t.Fatal("real identity did not remain stable across validation")
+	}
+	process, err := StartProcess(context.Background(), ProcessOptions{
+		Binary: binary, ConfigDir: options.ConfigDir, DataDir: options.DataDir,
+		GUISocket: guiSocket, ReadinessTimeout: 15 * time.Second,
+		Stdout: io.Discard, Stderr: io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := process.Shutdown(shutdownContext); err != nil {
+		t.Fatal(err)
 	}
 }
 

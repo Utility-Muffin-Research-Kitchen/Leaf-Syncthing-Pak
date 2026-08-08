@@ -13,12 +13,33 @@ import (
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
 )
 
-type fakeLifecycle struct{ closed bool }
+type fakeLifecycle struct {
+	closed bool
+	next   func(context.Context) (life1.Event, error)
+	ready  func(string) error
+}
 
 func (lifecycle *fakeLifecycle) Close() error {
 	lifecycle.closed = true
 	return nil
 }
+
+func (lifecycle *fakeLifecycle) Next(ctx context.Context) (life1.Event, error) {
+	if lifecycle.next != nil {
+		return lifecycle.next(ctx)
+	}
+	<-ctx.Done()
+	return life1.Event{}, ctx.Err()
+}
+
+func (lifecycle *fakeLifecycle) SendReady(launchID string) error {
+	if lifecycle.ready != nil {
+		return lifecycle.ready(launchID)
+	}
+	return nil
+}
+
+func (*fakeLifecycle) SendError(string, string) error { return nil }
 
 func TestBootstrapOrdersLockDirectoriesAndLifecycle(t *testing.T) {
 	config := testConfig(t)

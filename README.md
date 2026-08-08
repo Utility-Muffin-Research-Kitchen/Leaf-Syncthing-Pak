@@ -17,6 +17,14 @@ make controller-mlp1
 make package-platform PLATFORM=mlp1
 ```
 
+With an MLP1 connected over ADB, run the controller smoke in an isolated
+fixture with:
+
+```sh
+scripts/adb-mlp1-b1-controller-smoke.sh
+B1_MEASURE_SECONDS=600 scripts/adb-mlp1-b1-controller-smoke.sh
+```
+
 The command downloads only the locked upstream release inputs, rejects an
 unexpected redirect host, verifies the release-key fingerprint and checksum
 signature, verifies the archive digest, checks the annotated tag's peeled
@@ -28,8 +36,9 @@ plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
 the first six ordered controller startup steps (including recoverable
 three-file config recovery and same-filesystem identity generation/promotion),
 the token-preserving private-socket/LAN-only initial profile, and canonical
-cross-language fixture tests, but not the production upstream runner or
-Catastrophe UI planned for B1–B3. Its
+cross-language fixture tests. The supervised upstream runner, readiness probe,
+guardian cleanup, and reproducible MLP1 smoke are present; the card/folder
+model, private UI socket, and Catastrophe UI planned for B1–B3 are not. Its
 launcher exits with an explicit qualification-only message so a staged spike
 cannot be mistaken for the finished app. `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will

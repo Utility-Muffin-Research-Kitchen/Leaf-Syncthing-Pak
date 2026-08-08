@@ -27,7 +27,6 @@ const (
 var (
 	ErrAlreadyRunning = errors.New("leaf-syncthing: controller is already running")
 	ErrLifecycleStop  = errors.New("leaf-syncthing: active game requires an intentional policy stop")
-	ErrB1Incomplete   = errors.New("leaf-syncthing: B1 upstream startup is not implemented yet")
 )
 
 type Config struct {
@@ -47,6 +46,9 @@ type Config struct {
 
 type Lifecycle interface {
 	Close() error
+	Next(context.Context) (life1.Event, error)
+	SendReady(string) error
+	SendError(string, string) error
 }
 
 type ConnectFunc func(context.Context, life1.Config) (Lifecycle, life1.GameState, error)
@@ -60,6 +62,7 @@ type Runner struct {
 	Recover        RecoverConfigFunc
 	EnsureIdentity EnsureIdentityFunc
 	ApplyPause     ApplyPauseFunc
+	StartProcess   StartProcessFunc
 	Logf           func(string, ...any)
 }
 
