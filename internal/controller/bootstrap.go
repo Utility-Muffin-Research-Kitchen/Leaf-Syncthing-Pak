@@ -37,6 +37,7 @@ type Config struct {
 	UpstreamBinary  string
 	UpstreamVersion string
 	GUISocket       string
+	ControlSocket   string
 	DaemonSocket    string
 	Mode            life1.Mode
 	AckMS           int
@@ -96,6 +97,7 @@ func LoadConfig() (Config, error) {
 		UpstreamBinary:  filepath.Join(filepath.Dir(executable), "syncthing"),
 		UpstreamVersion: PinnedUpstreamVersion,
 		GUISocket:       filepath.Join(environment.RuntimePath, "services", ServiceDirName, "syncthing-gui.sock"),
+		ControlSocket:   filepath.Join(environment.RuntimePath, "services", ServiceDirName, "control.sock"),
 		DaemonSocket:    socket,
 		Mode:            life1.ModeNotify,
 		AckMS:           life1.DefaultAckMS,
@@ -228,7 +230,8 @@ func (session *Session) Close() error {
 
 func (config Config) validate() error {
 	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
-		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.GUISocket == "" || config.DaemonSocket == "" {
+		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.GUISocket == "" ||
+		config.ControlSocket == "" || config.DaemonSocket == "" {
 		return errors.New("leaf-syncthing: runtime, userdata, config, data, upstream, and daemon values are required")
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {

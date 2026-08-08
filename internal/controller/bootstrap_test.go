@@ -205,7 +205,11 @@ func TestBootstrapRejectsSymlinkedDurableRoot(t *testing.T) {
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	base := t.TempDir()
+	base, err := os.MkdirTemp("/tmp", "leaf-syncthing-controller-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
 	runtimeDir := filepath.Join(base, "runtime", "services", ServiceDirName)
 	userdata := filepath.Join(base, "userdata")
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
@@ -221,6 +225,7 @@ func testConfig(t *testing.T) Config {
 		UpstreamBinary:  filepath.Join(base, "syncthing"),
 		UpstreamVersion: PinnedUpstreamVersion,
 		GUISocket:       filepath.Join(base, "runtime", "services", ServiceDirName, "syncthing-gui.sock"),
+		ControlSocket:   filepath.Join(base, "runtime", "services", ServiceDirName, "control.sock"),
 		DaemonSocket:    filepath.Join(base, "jawakad.sock"),
 		Mode:            life1.ModeNotify, AckMS: life1.DefaultAckMS,
 	}

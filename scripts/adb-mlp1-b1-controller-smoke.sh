@@ -165,11 +165,21 @@ wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\
 run_and_wait() {
     local run_id="$1"
     local response
+    local control_socket="$runtime/services/$SERVICE_ID/control.sock"
+    local control_response
     response="$(request "{\"v\":1,\"op\":\"run\",\"id\":\"$run_id\",\"service_id\":\"$SERVICE_ID\"}")"
     grep -F '"ok":true' <<<"$response" >/dev/null
     wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"status\",\"id\":\"status\",\"service_id\":\"$SERVICE_ID\"}' | grep -F '\"effective_state\":\"running\"' | grep -F '\"coordination\":\"subscribed\"'" 500
     wait_remote "test -S '$runtime/services/$SERVICE_ID/syncthing-gui.sock'"
     "${ADB[@]}" shell "test \"\$(stat -c %a '$runtime/services/$SERVICE_ID/syncthing-gui.sock')\" = 600"
+    wait_remote "test -S '$control_socket'"
+    "${ADB[@]}" shell "test \"\$(stat -c %a '$control_socket')\" = 600"
+    control_response="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$control_socket' request '{\"v\":1,\"id\":\"device-smoke\",\"op\":\"status.get\",\"args\":{}}'" | tr -d '\r')"
+    grep -F '"ok":true' <<<"$control_response" >/dev/null
+    grep -F '"controller":"running"' <<<"$control_response" >/dev/null
+    grep -F '"state":"running"' <<<"$control_response" >/dev/null
+    grep -F '"version":"v2.1.2"' <<<"$control_response" >/dev/null
+    grep -F '"capabilities":["status.get"]' <<<"$control_response" >/dev/null
     "${ADB[@]}" shell "awk '\$2 ~ /:20C0\$/ && \$4 == \"0A\" { found=1 } END { exit found ? 1 : 0 }' /proc/net/tcp /proc/net/tcp6"
     "${ADB[@]}" shell "ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' | grep -v grep >/dev/null"
     "${ADB[@]}" shell "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' | grep -v grep | wc -l)\" -eq 2"
@@ -182,6 +192,7 @@ stop_and_wait() {
     grep -F '"ok":true' <<<"$response" >/dev/null
     wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"status\",\"id\":\"stopped\",\"service_id\":\"$SERVICE_ID\"}' | grep -E '\"effective_state\":\"(stopped|disabled)\"'" 500
     wait_remote "! ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/' | grep -v grep" 500
+    wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
 }
 
 measure_idle() {

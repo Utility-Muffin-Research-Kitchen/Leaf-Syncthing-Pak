@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
 const StopGrace = 10 * time.Second
@@ -52,6 +54,17 @@ func (runner Runner) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("start upstream: %w", err)
 	}
+	gameState := session.State
+	var status atomic.Value
+	status.Store(controlStatus(session, gameState))
+	control, err := uicontrol.Listen(runner.Config.ControlSocket, func() uicontrol.Status {
+		return status.Load().(uicontrol.Status)
+	})
+	if err != nil {
+		_ = shutdownUpstream(upstream)
+		return fmt.Errorf("start UI control socket: %w", err)
+	}
+	defer control.Close()
 
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -79,6 +92,14 @@ func (runner Runner) Run(ctx context.Context) error {
 				return shutdownUpstream(upstream)
 			}
 			return fmt.Errorf("upstream exited unexpectedly: %v", err)
+		case err := <-control.Done():
+			if err == nil {
+				err = errors.New("control socket stopped")
+			}
+			if shutdownErr := shutdownUpstream(upstream); shutdownErr != nil {
+				return fmt.Errorf("UI control socket failed (%v); %w", err, shutdownErr)
+			}
+			return fmt.Errorf("UI control socket failed: %w", err)
 		case result := <-lifecycleEvents:
 			if result.err != nil {
 				if ctx.Err() != nil {
@@ -89,8 +110,37 @@ func (runner Runner) Run(ctx context.Context) error {
 			if err := handleLifecycleEvent(session.Lifecycle, result.event); err != nil {
 				return err
 			}
+			gameState = reconcileGameState(gameState, result.event)
+			status.Store(controlStatus(session, gameState))
 		}
 	}
+}
+
+func controlStatus(session *Session, game life1.GameState) uicontrol.Status {
+	return uicontrol.Status{
+		Controller: "running",
+		Upstream: uicontrol.UpstreamStatus{
+			State: "running", Version: session.Identity.UpstreamVersion, DeviceID: session.Identity.DeviceID,
+		},
+		Game:         uicontrol.GameStatus{Active: game.Active, LaunchID: game.LaunchID, SourceID: game.SourceID},
+		Recovery:     uicontrol.RecoveryStatus{State: "ready", Changed: session.Recovery.Changed},
+		Capabilities: []string{uicontrol.OperationGet},
+	}
+}
+
+func reconcileGameState(current life1.GameState, event life1.Event) life1.GameState {
+	switch event.Name {
+	case "game.start":
+		return life1.GameState{
+			Active: true, LaunchID: event.LaunchID, SourceID: event.SourceID,
+			SavesPath: event.SavesPath, StatesPath: event.StatesPath,
+		}
+	case "game.cancel", "game.finish":
+		if current.LaunchID == event.LaunchID {
+			return life1.GameState{}
+		}
+	}
+	return current
 }
 
 func shutdownUpstream(upstream UpstreamProcess) error {

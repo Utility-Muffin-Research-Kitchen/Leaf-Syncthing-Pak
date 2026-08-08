@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
@@ -37,6 +38,10 @@ func TestRunAnswersGameStartThenShutsDown(t *testing.T) {
 			}
 		},
 		ready: func(launchID string) error {
+			info, err := os.Lstat(config.ControlSocket)
+			if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
+				t.Fatalf("control socket mode = %v, error=%v", info, err)
+			}
 			ready <- launchID
 			cancel()
 			return nil
@@ -52,6 +57,19 @@ func TestRunAnswersGameStartThenShutsDown(t *testing.T) {
 	}
 	if !upstream.shutdownCall {
 		t.Fatal("controller did not shut down upstream")
+	}
+	if _, err := os.Lstat(config.ControlSocket); !os.IsNotExist(err) {
+		t.Fatalf("control socket remained after controller exit: %v", err)
+	}
+}
+
+func TestReconcileGameStateIgnoresStaleFinish(t *testing.T) {
+	current := life1.GameState{Active: true, LaunchID: "current", SourceID: "primary"}
+	if got := reconcileGameState(current, life1.Event{Name: "game.finish", LaunchID: "old"}); got != current {
+		t.Fatalf("stale finish changed game state: %+v", got)
+	}
+	if got := reconcileGameState(current, life1.Event{Name: "game.finish", LaunchID: "current"}); got.Active {
+		t.Fatalf("current finish did not clear game state: %+v", got)
 	}
 }
 

@@ -1,8 +1,9 @@
 PYTHON ?= python3
 GO ?= go
+CC ?= cc
 PLATFORM ?= mlp1
 
-.PHONY: verify-upstream gateway-mlp1 controller-mlp1 package-platform package-mlp1 test clean
+.PHONY: verify-upstream gateway-mlp1 controller-mlp1 package-platform package-mlp1 test test-ui-control-c clean
 
 verify-upstream:
 	$(PYTHON) scripts/verify_upstream.py \
@@ -32,6 +33,14 @@ package-mlp1: verify-upstream gateway-mlp1
 
 test:
 	$(GO) test ./...
+	$(MAKE) test-ui-control-c
+
+test-ui-control-c:
+	@mkdir -p build/tests
+	$(CC) -std=c11 -Wall -Wextra -Werror \
+		-DUI_CONTROL_FIXTURES_ROOT='"$(CURDIR)/tests/fixtures/ui-control-v1"' \
+		-o build/tests/ui-control-v1 tests/ui_control_v1_test.c
+	build/tests/ui-control-v1
 
 clean:
 	rm -rf build workdir
