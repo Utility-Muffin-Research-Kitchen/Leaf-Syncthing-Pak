@@ -185,6 +185,34 @@ func TestBootstrapQueriesLifecycleBeforeConfigRecovery(t *testing.T) {
 	}
 }
 
+func TestBootstrapForcesManagedFoldersPausedBeforeSpawn(t *testing.T) {
+	config := testConfig(t)
+	runner := Runner{
+		Config: config,
+		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		EnsureIdentity: successfulIdentity,
+		LoadFolders: func(string) ([]syncthingconfig.ConfiguredFolder, error) {
+			return []syncthingconfig.ConfiguredFolder{{ID: "leaf-saves-0011223344556677", Kind: "saves"}}, nil
+		},
+		ApplyPause: func(_ string, desired map[string]bool, _ syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error) {
+			if len(desired) != 1 || !desired["leaf-saves-0011223344556677"] {
+				t.Fatalf("offline pause set = %#v", desired)
+			}
+			return syncthingconfig.PauseEditResult{Changed: true}, nil
+		},
+	}
+	session, err := runner.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if len(session.Folders) != 1 || !session.Folders[0].Paused || !session.PauseEdit.Changed {
+		t.Fatalf("managed folder session = %+v", session)
+	}
+}
+
 func TestBootstrapRejectsSymlinkedDurableRoot(t *testing.T) {
 	config := testConfig(t)
 	target := t.TempDir()
@@ -235,6 +263,12 @@ func testConfig(t *testing.T) Config {
 }
 
 func successfulIdentity(_ context.Context, options syncthingconfig.IdentityOptions, recovery syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+	if err := os.MkdirAll(options.ConfigDir, 0o700); err != nil {
+		return syncthingconfig.Identity{}, err
+	}
+	if err := os.WriteFile(filepath.Join(options.ConfigDir, "config.xml"), []byte(`<configuration version="52"></configuration>`), 0o600); err != nil {
+		return syncthingconfig.Identity{}, err
+	}
 	return syncthingconfig.Identity{
 		DeviceID: "fixture-device", UpstreamVersion: options.UpstreamVersion, ConfigVersion: 52,
 	}, nil

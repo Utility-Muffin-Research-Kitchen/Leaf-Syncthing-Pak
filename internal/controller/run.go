@@ -56,8 +56,12 @@ func (runner Runner) Run(ctx context.Context) error {
 		DataDir: runner.Config.DataDir, GUISocket: runner.Config.GUISocket,
 		Stdout: os.Stdout, Stderr: os.Stderr,
 	})
-	if err != nil {
+	var foreignConflict syncthingconfig.Conflict
+	if err != nil && !errors.As(err, &foreignConflict) {
 		return fmt.Errorf("start upstream: %w", err)
+	}
+	if err != nil {
+		upstream = nil
 	}
 	loadCards := runner.LoadCards
 	if loadCards == nil {
@@ -77,7 +81,14 @@ func (runner Runner) Run(ctx context.Context) error {
 	}
 	gameState := session.State
 	var status atomic.Value
-	status.Store(controlStatus(session, gameState, cardInventory))
+	initialStatus := controlStatus(session, gameState, cardInventory)
+	if !foreignConflict.Empty() {
+		initialStatus.Upstream.State = "conflict"
+		initialStatus.Issues = append(initialStatus.Issues, uicontrol.Issue{
+			Code: "foreign-syncthing", Message: foreignConflict.Error(), Scope: "controller", SubjectID: ServiceID,
+		})
+	}
+	status.Store(initialStatus)
 	enrollCard := runner.EnrollCard
 	if enrollCard == nil {
 		enrollCard = func(source leaf.Source) (cards.Identity, bool, error) {
@@ -98,7 +109,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			if err != nil {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The card was enrolled but inventory refresh failed"}
 			}
-			updated := applyCardInventory(status.Load().(uicontrol.Status), inventory)
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders)
 			status.Store(updated)
 			return updated, nil
 		},
@@ -125,12 +136,16 @@ func (runner Runner) Run(ctx context.Context) error {
 			}
 		}
 	}()
+	var upstreamDone <-chan error
+	if upstream != nil {
+		upstreamDone = upstream.Done()
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return shutdownUpstream(upstream)
-		case err := <-upstream.Done():
+		case err := <-upstreamDone:
 			if ctx.Err() != nil {
 				return shutdownUpstream(upstream)
 			}
@@ -171,7 +186,21 @@ func controlStatus(session *Session, game life1.GameState, inventory []cards.Car
 		Recovery:     uicontrol.RecoveryStatus{State: "ready", Changed: session.Recovery.Changed},
 		Capabilities: []string{uicontrol.OperationGet, uicontrol.OperationEnrollCard},
 	}
-	return applyCardInventory(status, inventory)
+	return applyInventory(status, inventory, session.Folders)
+}
+
+func applyInventory(status uicontrol.Status, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder) uicontrol.Status {
+	status = applyCardInventory(status, inventory)
+	rows, folderIssues := reconcileManagedFolders(folders, inventory)
+	issues := make([]uicontrol.Issue, 0, len(status.Issues)+len(folderIssues))
+	for _, issue := range status.Issues {
+		if issue.Scope != "folder" {
+			issues = append(issues, issue)
+		}
+	}
+	status.Folders = rows
+	status.Issues = append(issues, folderIssues...)
+	return status
 }
 
 func applyCardInventory(status uicontrol.Status, inventory []cards.Card) uicontrol.Status {
@@ -250,6 +279,9 @@ func reconcileGameState(current life1.GameState, event life1.Event) life1.GameSt
 }
 
 func shutdownUpstream(upstream UpstreamProcess) error {
+	if upstream == nil {
+		return nil
+	}
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), StopGrace)
 	defer shutdownCancel()
 	if err := upstream.Shutdown(shutdownContext); err != nil {
@@ -261,8 +293,8 @@ func shutdownUpstream(upstream UpstreamProcess) error {
 func handleLifecycleEvent(lifecycle Lifecycle, event life1.Event) error {
 	switch event.Name {
 	case "game.start":
-		// B1 has no enrolled folders yet. With no possible binding on the active
-		// card there is no writer to pause, so LIFE-1 requires immediate ready.
+		// B1 creates no folders and forces recognized pre-B3 bindings paused
+		// before spawn, so no managed writer can delay this acknowledgment yet.
 		if err := lifecycle.SendReady(event.LaunchID); err != nil {
 			return fmt.Errorf("answer game.start: %w", err)
 		}

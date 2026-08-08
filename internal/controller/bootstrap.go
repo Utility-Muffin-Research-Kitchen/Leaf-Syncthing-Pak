@@ -57,6 +57,7 @@ type ConnectFunc func(context.Context, life1.Config) (Lifecycle, life1.GameState
 type RecoverConfigFunc func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error)
 type EnsureIdentityFunc func(context.Context, syncthingconfig.IdentityOptions, syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error)
 type ApplyPauseFunc func(string, map[string]bool, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error)
+type LoadManagedFoldersFunc func(string) ([]syncthingconfig.ConfiguredFolder, error)
 
 type Runner struct {
 	Config         Config
@@ -64,6 +65,7 @@ type Runner struct {
 	Recover        RecoverConfigFunc
 	EnsureIdentity EnsureIdentityFunc
 	ApplyPause     ApplyPauseFunc
+	LoadFolders    LoadManagedFoldersFunc
 	StartProcess   StartProcessFunc
 	LoadCards      LoadCardsFunc
 	EnrollCard     EnrollCardFunc
@@ -75,6 +77,7 @@ type Session struct {
 	Recovery  syncthingconfig.RecoveryResult
 	Identity  syncthingconfig.Identity
 	PauseEdit syncthingconfig.PauseEditResult
+	Folders   []syncthingconfig.ConfiguredFolder
 	Lifecycle Lifecycle
 	lock      *os.File
 }
@@ -202,19 +205,35 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("ensure upstream identity: %w", err)
 	}
+	loadFolders := runner.LoadFolders
+	if loadFolders == nil {
+		loadFolders = syncthingconfig.ReadManagedFolders
+	}
+	folders, err := loadFolders(runner.Config.ConfigDir)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("read managed folders: %w", err)
+	}
+	pauseSet := make(map[string]bool, len(folders))
+	for _, folder := range folders {
+		pauseSet[folder.ID] = true
+	}
 	applyPause := runner.ApplyPause
 	if applyPause == nil {
 		applyPause = syncthingconfig.ApplyOfflinePauseSet
 	}
-	pauseEdit, err := applyPause(runner.Config.ConfigDir, nil, nil)
+	pauseEdit, err := applyPause(runner.Config.ConfigDir, pauseSet, nil)
 	if err != nil {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("apply offline pause set: %w", err)
 	}
+	for index := range folders {
+		folders[index].Paused = true
+	}
 
 	closeLock = false
 	return &Session{
-		State: state, Recovery: recovery, Identity: identity, PauseEdit: pauseEdit,
+		State: state, Recovery: recovery, Identity: identity, PauseEdit: pauseEdit, Folders: folders,
 		Lifecycle: lifecycle, lock: lock,
 	}, nil
 }

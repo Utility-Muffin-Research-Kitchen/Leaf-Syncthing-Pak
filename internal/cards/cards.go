@@ -42,6 +42,7 @@ var (
 	ErrMarkerMissing   = errors.New("managed folder marker is missing")
 	ErrMarkerCollision = errors.New("managed folder marker collides with a non-directory entry")
 	ErrForeignMarker   = errors.New("default .stfolder indicates a foreign Syncthing manager")
+	ErrUnsafeRoot      = errors.New("managed folder root is absent, symlinked, or not a directory")
 )
 
 type Identity struct {
@@ -73,6 +74,10 @@ func validIdentityID(id string) bool {
 func ValidateManagedMarker(root, markerName string) error {
 	if markerName == "" || markerName == ".stfolder" || filepath.Base(markerName) != markerName {
 		return ErrMarkerCollision
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return ErrUnsafeRoot
 	}
 	if _, err := os.Lstat(filepath.Join(root, ".stfolder")); err == nil {
 		return ErrForeignMarker

@@ -10,6 +10,7 @@ SERVICE_ID="org.umrk.syncthing"
 MEASURE_SECONDS="${B1_MEASURE_SECONDS:-0}"
 LIVE_PANGU_PID=""
 TEST_DAEMON_PID=""
+FOREIGN_SYNCTHING_PID=""
 REMOTE_CARD_MOUNTED=0
 
 if [[ ! "$REMOTE_DIR" =~ ^/tmp/leaf-syncthing-b1-[A-Za-z0-9._/-]+$ ]] ||
@@ -78,9 +79,25 @@ cleanup_test_daemon() {
     fi
 }
 
+cleanup_foreign_syncthing() {
+    if [ -n "${FOREIGN_SYNCTHING_PID:-}" ]; then
+        "${ADB[@]}" shell "kill '$FOREIGN_SYNCTHING_PID' 2>/dev/null || true"
+    fi
+    for _ in $(seq 1 100); do
+        if ! "${ADB[@]}" shell "ps -eo args | grep -F '$REMOTE_DIR/foreign/' | grep -v grep >/dev/null"; then
+            FOREIGN_SYNCTHING_PID=""
+            return 0
+        fi
+        sleep 0.05
+    done
+    "${ADB[@]}" shell "ps -eo pid,args | awk -v needle='$REMOTE_DIR/foreign/' 'index(\$0, needle) { print \$1 }' | xargs -r kill -KILL" 2>/dev/null || true
+    FOREIGN_SYNCTHING_PID=""
+}
+
 cleanup() {
     status=$?
     set +e
+    cleanup_foreign_syncthing
     cleanup_test_daemon
     if [ "$status" -ne 0 ]; then
         echo "B1 controller logs after failure:" >&2
@@ -200,6 +217,32 @@ stop_and_wait() {
     wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
 }
 
+verify_foreign_syncthing_conflict() {
+    local response conflict_status foreign_count
+    "${ADB[@]}" shell "set -eu
+        mkdir -p '$REMOTE_DIR/foreign/config' '$REMOTE_DIR/foreign/data'
+        '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' generate --config='$REMOTE_DIR/foreign/config' --data='$REMOTE_DIR/foreign/data' --no-port-probing >/dev/null 2>&1
+        ('$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/syncthing' serve --config='$REMOTE_DIR/foreign/config' --data='$REMOTE_DIR/foreign/data' --no-browser --no-restart --no-upgrade --no-port-probing --gui-address=127.0.0.1:8384 --log-file=- >'$REMOTE_DIR/foreign/syncthing.log' 2>&1 & echo \$! >'$REMOTE_DIR/foreign/pid')"
+    FOREIGN_SYNCTHING_PID="$("${ADB[@]}" shell "cat '$REMOTE_DIR/foreign/pid'" | tr -d '\r')"
+    wait_remote "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/foreign/config' | grep -v grep | wc -l)\" -eq 2" 500
+    foreign_count="$("${ADB[@]}" shell "ps -eo args | grep -F '$REMOTE_DIR/foreign/config' | grep -v grep | wc -l" | tr -d '\r')"
+
+    response="$(request '{"v":1,"op":"run","id":"foreign-conflict-run","service_id":"org.umrk.syncthing"}')"
+    grep -F '"ok":true' <<<"$response" >/dev/null
+    wait_remote "test -S '$runtime/services/$SERVICE_ID/control.sock'" 500
+    conflict_status="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$runtime/services/$SERVICE_ID/control.sock' request '{\"v\":1,\"id\":\"foreign-conflict\",\"op\":\"status.get\",\"args\":{}}'" | tr -d '\r')"
+    grep -F '"state":"conflict"' <<<"$conflict_status" >/dev/null
+    grep -F '"code":"foreign-syncthing"' <<<"$conflict_status" >/dev/null
+    "${ADB[@]}" shell "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/foreign/config' | grep -v grep | wc -l)\" -eq '$foreign_count'"
+    response="$(request '{"v":1,"op":"stop","id":"foreign-conflict-stop","service_id":"org.umrk.syncthing"}')"
+    grep -F '"ok":true' <<<"$response" >/dev/null
+    wait_remote "! ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/leaf-syncthing service run' | grep -v grep" 500
+    wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
+    "${ADB[@]}" shell "test \"\$(ps -eo args | grep -F '$REMOTE_DIR/foreign/config' | grep -v grep | wc -l)\" -eq '$foreign_count'"
+    cleanup_foreign_syncthing
+    wait_remote "! pidof syncthing >/dev/null 2>&1" 500
+}
+
 downgrade_config_schema_fixture() {
     local config_dir="$userdata/Syncthing/config"
     local current older
@@ -220,6 +263,25 @@ downgrade_config_schema_fixture() {
         sync"
     MIGRATION_CURRENT_VERSION="$current"
     MIGRATION_OLD_VERSION="$older"
+}
+
+add_managed_folder_fixture() {
+    local config_dir="$userdata/Syncthing/config"
+    local card_id digest
+    card_id="$("${ADB[@]}" shell "sed -n 's/.*\"id\":\"\([0-9a-f][0-9a-f]*\)\".*/\1/p' '$userdata/Syncthing/card-id'" | tr -d '\r')"
+    if [[ ! "$card_id" =~ ^[0-9a-f]{32}$ ]]; then
+        echo "could not read the enrolled fixture card id: $card_id" >&2
+        exit 1
+    fi
+    digest="$(printf '%s' "${card_id}saves" | shasum -a 256 | awk '{print $1}')"
+    TEST_FOLDER_ID="leaf-saves-${digest:0:16}"
+    TEST_MARKER=".leaf-saves-${digest:0:12}"
+    "${ADB[@]}" shell "set -eu
+        mkdir -p '$REMOTE_DIR/sd/Saves/$TEST_MARKER'
+        sed 's#</configuration>#    <folder id=\"$TEST_FOLDER_ID\" label=\"Leaf Saves\" path=\"$REMOTE_DIR/sd/Saves\" type=\"sendonly\"><paused>false</paused><markerName>$TEST_MARKER</markerName></folder>\n</configuration>#' '$config_dir/config.xml' >'$config_dir/config.xml.folder-test'
+        grep -q 'id=\"$TEST_FOLDER_ID\"' '$config_dir/config.xml.folder-test'
+        mv '$config_dir/config.xml.folder-test' '$config_dir/config.xml'
+        sync"
 }
 
 measure_idle() {
@@ -290,10 +352,12 @@ measure_idle() {
     "
 }
 
+verify_foreign_syncthing_conflict
 run_and_wait first-run
 measure_idle "$MEASURE_SECONDS"
 first_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
 stop_and_wait first-stop
+add_managed_folder_fixture
 downgrade_config_schema_fixture
 run_and_wait second-run
 second_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
@@ -303,9 +367,22 @@ if [ "$first_hashes" != "$second_hashes" ]; then
 fi
 "${ADB[@]}" shell "set -eu
     grep -q 'version=\"$MIGRATION_CURRENT_VERSION\"' '$userdata/Syncthing/config/config.xml'
-    grep -q 'version=\"$MIGRATION_OLD_VERSION\"' '$userdata/Syncthing/config/config.xml.bak'
+    grep -q 'version=\"$MIGRATION_CURRENT_VERSION\"' '$userdata/Syncthing/config/config.xml.bak'
+    grep -q '<paused>true</paused>' '$userdata/Syncthing/config/config.xml'
+    grep -q '<paused>false</paused>' '$userdata/Syncthing/config/config.xml.bak'
     test ! -e '$userdata/Syncthing/config.migrate.tmp'
     test ! -e '$userdata/Syncthing/data.migrate.tmp'"
+folder_status="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$runtime/services/$SERVICE_ID/control.sock' request '{\"v\":1,\"id\":\"folder-status\",\"op\":\"status.get\",\"args\":{}}'" | tr -d '\r')"
+grep -F "\"id\":\"$TEST_FOLDER_ID\"" <<<"$folder_status" >/dev/null
+grep -F '"state":"paused"' <<<"$folder_status" >/dev/null
+grep -F '"pause_reasons":["first-sync"]' <<<"$folder_status" >/dev/null
 stop_and_wait second-stop
 
-echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable device/card identity, disposable config migration, verified stop)"
+"${ADB[@]}" shell "mkdir '$REMOTE_DIR/sd/Saves/.stfolder'"
+run_and_wait foreign-marker-run
+folder_status="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$runtime/services/$SERVICE_ID/control.sock' request '{\"v\":1,\"id\":\"foreign-marker-status\",\"op\":\"status.get\",\"args\":{}}'" | tr -d '\r')"
+grep -F '"code":"foreign-folder-manager"' <<<"$folder_status" >/dev/null
+grep -F '"state":"error"' <<<"$folder_status" >/dev/null
+stop_and_wait foreign-marker-stop
+
+echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable identity, disposable config migration, managed-folder pause/marker reporting, verified stop)"

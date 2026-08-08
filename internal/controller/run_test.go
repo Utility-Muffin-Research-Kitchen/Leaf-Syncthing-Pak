@@ -156,6 +156,51 @@ func TestRunReturnsUnexpectedUpstreamExit(t *testing.T) {
 	}
 }
 
+func TestRunServesReportedConflictWithoutSecondUpstream(t *testing.T) {
+	config := testConfig(t)
+	runner := testServiceRunner(config, &fakeLifecycle{}, &fakeUpstream{done: make(chan error)})
+	runner.StartProcess = func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
+		return nil, syncthingconfig.Conflict{ProcessIDs: []int{42}, ConventionalPort: true}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Lstat(config.ControlSocket); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("conflict control socket did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	connection, err := net.Dial("unix", config.ControlSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := life1.Write(connection, json.RawMessage(`{"v":1,"id":"conflict","op":"status.get","args":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := life1.Read(connection)
+	_ = connection.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response uicontrol.Response
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Result == nil || response.Result.Upstream.State != "conflict" ||
+		len(response.Result.Issues) != 1 || response.Result.Issues[0].Code != "foreign-syncthing" {
+		t.Fatalf("conflict response = %+v", response)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testServiceRunner(config Config, lifecycle *fakeLifecycle, upstream *fakeUpstream) Runner {
 	return Runner{
 		Config: config,

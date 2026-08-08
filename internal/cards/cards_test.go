@@ -166,6 +166,13 @@ func TestBindingNamesAndMarkerGuard(t *testing.T) {
 	if err := ValidateManagedMarker(root, marker); !errors.Is(err, ErrForeignMarker) {
 		t.Fatalf("foreign marker error = %v", err)
 	}
+	symlink := filepath.Join(t.TempDir(), "linked-root")
+	if err := os.Symlink(root, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManagedMarker(symlink, marker); !errors.Is(err, ErrUnsafeRoot) {
+		t.Fatalf("symlinked root error = %v", err)
+	}
 }
 
 func testSource(t *testing.T, id string) leaf.Source {
