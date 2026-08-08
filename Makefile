@@ -28,7 +28,7 @@ package-platform:
 		*) echo "unsupported Leaf-Syncthing-Pak platform: $(PLATFORM)" >&2; exit 1 ;; \
 	esac
 
-package-mlp1: verify-upstream gateway-mlp1
+package-mlp1: verify-upstream controller-mlp1
 	$(PYTHON) scripts/package_mlp1.py
 
 test:

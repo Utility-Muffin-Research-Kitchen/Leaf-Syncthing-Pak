@@ -60,9 +60,7 @@ cp -f "$JAWAKA_DIR/build/mlp1/bin/jawakad" \
 cp -f "$ROOT_DIR/build/mlp1/bin/leaf-syncthing" \
     "$ROOT_DIR/build/mlp1/package/Syncthing.pak/bin/syncthing" \
     "$BUNDLE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/"
-printf '%s\n' \
-    '{"id":"org.umrk.syncthing","name":"Syncthing B1 Device Fixture","platform":"mlp1","pak_version":"0.0.0-b1","service":{"schema":1,"id":"org.umrk.syncthing","run":{"path":"bin/leaf-syncthing","args":["service","run"]},"restart":"on-failure","default_enabled":false,"stop_grace_ms":10000,"lifecycle":{"game":"notify","stop_on_storage_change":true,"stop_on_suspend":true}},"state":{"root":"Syncthing","revoke_on_uninstall":["leaf/trusted-clients.json"],"retained_roots":["Syncthing"]}}' \
-    >"$BUNDLE_DIR/sd/Apps/mlp1/Syncthing.pak/pak.json"
+cp -f "$ROOT_DIR/pak.json" "$BUNDLE_DIR/sd/Apps/mlp1/Syncthing.pak/pak.json"
 printf '%s\n' '{"version":2,"platform":"mlp1","systems":[]}' \
     >"$BUNDLE_DIR/sd/.system/leaf/platforms/mlp1/defaults/systems.json"
 
@@ -230,6 +228,32 @@ stop_and_wait() {
     wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"status\",\"id\":\"stopped\",\"service_id\":\"$SERVICE_ID\"}' | grep -E '\"effective_state\":\"(stopped|disabled)\"'" 500
     wait_remote "! ps -eo args | grep -F '$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak/bin/' | grep -v grep" 500
     wait_remote "test ! -e '$runtime/services/$SERVICE_ID/control.sock'" 500
+}
+
+verify_reinstall_and_index_rebuild() {
+    local expected_hashes="$1" rebuilt_hashes
+    local package="$REMOTE_DIR/sd/Apps/mlp1/Syncthing.pak"
+    echo "Exercising package reinstall and derived-index rebuild"
+    "${ADB[@]}" shell "set -eu
+        mv '$package' '$package.reinstall'
+        mkdir -p '$package/bin'
+        cp '$package.reinstall/bin/leaf-syncthing' '$package.reinstall/bin/syncthing' '$package/bin/'
+        cp '$package.reinstall/pak.json' '$package/'
+        chmod 755 '$package/bin/'*
+        rm -rf '$package.reinstall' '$userdata/Syncthing/data'
+        mkdir -p '$userdata/Syncthing/data'
+        sync"
+    cleanup_test_daemon
+    start_test_daemon
+    wait_remote "test -S '$socket'" 400
+    wait_remote "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$socket' request '{\"v\":1,\"op\":\"list\",\"id\":\"reinstall-discover\"}' | grep -F '$SERVICE_ID'" 400
+    run_and_wait reinstall-index-run
+    rebuilt_hashes="$("${ADB[@]}" shell "sha256sum '$userdata/Syncthing/config/cert.pem' '$userdata/Syncthing/config/key.pem' '$userdata/Syncthing/config/.leaf-generation-v1' '$userdata/Syncthing/card-id'" | tr -d '\r')"
+    if [ "$expected_hashes" != "$rebuilt_hashes" ]; then
+        echo "identity hashes changed across package reinstall/index rebuild" >&2
+        exit 1
+    fi
+    stop_and_wait reinstall-index-stop
 }
 
 generation_pids() {
@@ -517,6 +541,7 @@ grep -F "\"id\":\"$TEST_FOLDER_ID\"" <<<"$folder_status" >/dev/null
 grep -F '"state":"paused"' <<<"$folder_status" >/dev/null
 grep -F '"pause_reasons":["first-sync"]' <<<"$folder_status" >/dev/null
 stop_and_wait second-stop
+verify_reinstall_and_index_rebuild "$second_hashes"
 
 "${ADB[@]}" shell "mkdir '$REMOTE_DIR/sd/Saves/.stfolder'"
 run_and_wait foreign-marker-run
@@ -530,4 +555,4 @@ verify_controller_death_cleanup
 verify_monitor_death_cleanup
 verify_daemon_death_guardian
 
-echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, stable identity, disposable config migration, managed-folder pause/marker reporting, transitive guardian/restart safety)"
+echo "PASS MLP1 B1 controller smoke (SVC-1/LIFE-1, private API, restart/reinstall/index-stable identity, disposable config migration, managed-folder pause/marker reporting, transitive guardian/restart safety)"

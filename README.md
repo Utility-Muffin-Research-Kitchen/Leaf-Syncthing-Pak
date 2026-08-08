@@ -31,23 +31,22 @@ unexpected redirect host, verifies the release-key fingerprint and checksum
 signature, verifies the archive digest, checks the annotated tag's peeled
 commit, and inspects the archive layout without extracting it.
 
-The current package is intentionally labeled `0.0.0-b0a`: it contains the
-verified upstream binary and the read-only HTTPS gateway qualification spike,
-plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
-the first six ordered controller startup steps (including recoverable
+The current package is intentionally labeled `0.0.0-b1`: it contains the
+verified upstream binary and the pure-Go resident controller with its LIFE-1
+transport, persistent subscribe/state-reconciliation client, the first six
+ordered controller startup steps (including recoverable
 three-file config recovery, same-filesystem identity generation/promotion, and
 disposable-copy migration that never replaces an existing certificate/key),
 the token-preserving private-socket/LAN-only initial profile, and canonical
-cross-language fixture tests. The source tree also contains the unfinished B1
-controller: supervised upstream lifecycle, strict PATH-2 card enrollment and
-inventory, fail-closed pre-B3 folder/conflict reconciliation, and the private
-UI control socket. The B0a package assembler does not include or launch that
-controller, and the C/Catastrophe UI and folder onboarding remain unfinished.
-Its launcher exits with an explicit
-qualification-only message so a staged spike cannot be mistaken for the
-finished app. `Leaf-Syncthing-Pak` and
+cross-language fixture tests. The package service runs the supervised upstream
+lifecycle, strict PATH-2 card enrollment and inventory, fail-closed pre-B3
+folder/conflict reconciliation, and the private UI control socket. The B0a
+gateway spike remains source-only qualification evidence; the C/Catastrophe UI
+and folder onboarding remain unfinished. Its foreground launcher exits with an
+explicit development message while Jawaka owns the service entrypoint.
+`Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will
-outlive this spike artifact; the `0.0.0-b0a` package itself must never enter a
+outlive this development artifact; the `0.0.0-b1` package itself must never enter a
 Leaf release or production Pak Rat catalog.
 
 Leaf can stage it only through the explicit optional-app path:
