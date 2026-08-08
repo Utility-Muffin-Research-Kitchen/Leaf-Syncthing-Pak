@@ -179,4 +179,7 @@ func TestEnsureAppDirsCreatesOnlyOwnedRoots(t *testing.T) {
 	if strings.Contains(env.StateDir(), ".system") {
 		t.Fatalf("state dir entered release-managed tree: %s", env.StateDir())
 	}
+	if filepath.Base(env.StateDir()) != "Syncthing" {
+		t.Fatalf("state dir = %s, want Syncthing app root", env.StateDir())
+	}
 }

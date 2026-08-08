@@ -13,6 +13,7 @@ pinned contract revision.
 ```sh
 make verify-upstream
 make test
+make controller-mlp1
 make package-platform PLATFORM=mlp1
 ```
 

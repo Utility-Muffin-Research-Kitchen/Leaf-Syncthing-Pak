@@ -10,7 +10,7 @@ const (
 	DefaultPlatform      = "mlp1"
 	defaultPrimaryRoot   = "/mnt/sdcard"
 	defaultSecondaryRoot = "/media/sdcard1"
-	AppStateName         = "Itch-io"
+	AppStateName         = "Syncthing"
 )
 
 type getenvFunc func(string) (string, bool)

@@ -2,7 +2,7 @@ PYTHON ?= python3
 GO ?= go
 PLATFORM ?= mlp1
 
-.PHONY: verify-upstream gateway-mlp1 package-platform package-mlp1 test clean
+.PHONY: verify-upstream gateway-mlp1 controller-mlp1 package-platform package-mlp1 test clean
 
 verify-upstream:
 	$(PYTHON) scripts/verify_upstream.py \
@@ -14,6 +14,12 @@ gateway-mlp1:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build \
 		-trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
 		-o build/mlp1/bin/b0a-gateway-spike ./cmd/b0a-gateway-spike
+
+controller-mlp1:
+	@mkdir -p build/mlp1/bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build \
+		-trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
+		-o build/mlp1/bin/leaf-syncthing ./cmd/leaf-syncthing
 
 package-platform:
 	@case "$(PLATFORM)" in \
