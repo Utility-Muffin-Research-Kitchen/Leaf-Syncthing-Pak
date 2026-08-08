@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the non-production B1 MLP1 controller package."""
+"""Assemble the non-production B2 MLP1 controller and UI package."""
 
 from __future__ import annotations
 

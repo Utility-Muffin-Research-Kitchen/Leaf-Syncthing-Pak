@@ -230,6 +230,13 @@ func (manager *Manager) Close() {
 }
 
 func (manager *Manager) Tick() (bool, error) {
+	manager.mu.Lock()
+	if manager.instance == nil {
+		manager.mu.Unlock()
+		return false, nil
+	}
+	manager.mu.Unlock()
+
 	addresses, addressErr := manager.currentAddresses()
 	manager.mu.Lock()
 	current := manager.instance

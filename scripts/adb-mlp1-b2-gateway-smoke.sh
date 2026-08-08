@@ -76,6 +76,28 @@ curl -ksS --connect-timeout 3 --max-time 5 -b "$tmp_dir/cookies" \
     "${url}rest/events?since=0&limit=1&timeout=1" -o "$tmp_dir/events.json"
 python3 -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])), list)' "$tmp_dir/events.json"
 
+stage="verify redacted configuration view"
+curl -ksS --connect-timeout 3 --max-time 5 -b "$tmp_dir/cookies" \
+    "${url}rest/config" -o "$tmp_dir/config.json"
+python3 - "$tmp_dir/config.json" <<'PY'
+import json
+import sys
+
+def assert_redacted(value):
+    if isinstance(value, dict):
+        for name, child in value.items():
+            if name.lower() in {"apikey", "password", "untrustedpassword", "token"}:
+                assert child == "", f"sensitive field {name} was not redacted"
+            else:
+                assert_redacted(child)
+    elif isinstance(value, list):
+        for child in value:
+            assert_redacted(child)
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    assert_redacted(json.load(source))
+PY
+
 stage="deny unknown and mutating routes"
 unknown="$(curl -ksS --connect-timeout 3 --max-time 5 -b "$tmp_dir/cookies" \
     -o /dev/null -w '%{http_code}' "${url}rest/system/shutdown")"
@@ -111,4 +133,4 @@ if curl -ksS --connect-timeout 1 --max-time 2 "$url" -o /dev/null 2>/dev/null; t
     exit 1
 fi
 
-echo "PASS real-device gateway QR pairing, cookie policy, UI, long-poll, read-only denial, fingerprint, logout, and close"
+echo "PASS real-device gateway QR pairing, cookie policy, UI, long-poll, config redaction, read-only denial, fingerprint, logout, and close"

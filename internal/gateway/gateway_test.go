@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -79,6 +80,27 @@ func submitPair(t *testing.T, client *http.Client, status Status, csrf string, b
 		t.Fatal(err)
 	}
 	return response
+}
+
+func TestTickDoesNotInspectAddressesWhileClosed(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	addressCalls := 0
+	manager, err := New(Options{
+		StateDirectory: t.TempDir(), Upstream: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("unexpected upstream request")
+		}),
+		Port: 0, AllowLoopback: true, Now: func() time.Time { return now },
+		Addresses: func() ([]net.IP, error) {
+			addressCalls++
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed, err := manager.Tick(); err != nil || closed || addressCalls != 0 {
+		t.Fatalf("closed tick = closed:%v err:%v address calls:%d", closed, err, addressCalls)
+	}
 }
 
 func TestPairingProxyLogoutAndReadOnlyBoundary(t *testing.T) {

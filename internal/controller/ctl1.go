@@ -17,7 +17,9 @@ const ctl1MaxPayload = 1024 * 1024
 // helper proceeds only after the supervisor reports both no process-group
 // owner and no held/stale generation lease.
 func VerifyServiceStopped(ctx context.Context, socketPath string) error {
-	request := map[string]any{"v": 1, "id": "syncthing-reset-check", "op": "list"}
+	request := map[string]any{
+		"v": 1, "id": "syncthing-reset-check", "op": "status", "service_id": ServiceID,
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -41,33 +43,26 @@ func VerifyServiceStopped(ctx context.Context, socketPath string) error {
 		return err
 	}
 	var response struct {
-		Version  int    `json:"v"`
-		ID       string `json:"id"`
-		Services []struct {
-			ServiceID       string `json:"service_id"`
-			EffectiveState  string `json:"effective_state"`
-			GenerationLease string `json:"generation_lease_state"`
-			Ownership       struct {
-				PGID *int `json:"pgid"`
-			} `json:"ownership_identity"`
-		} `json:"services"`
+		Version         int    `json:"v"`
+		ID              string `json:"id"`
+		ServiceID       string `json:"service_id"`
+		EffectiveState  string `json:"effective_state"`
+		GenerationLease string `json:"generation_lease_state"`
+		Ownership       struct {
+			PGID *int `json:"pgid"`
+		} `json:"ownership_identity"`
 	}
-	if err := json.Unmarshal(reply, &response); err != nil || response.Version != 1 || response.ID != "syncthing-reset-check" {
+	if err := json.Unmarshal(reply, &response); err != nil || response.Version != 1 ||
+		response.ID != "syncthing-reset-check" || response.ServiceID != ServiceID {
 		return errors.New("CTL-1 returned an invalid reset-state response")
 	}
-	for _, service := range response.Services {
-		if service.ServiceID != ServiceID {
-			continue
-		}
-		stopped := service.EffectiveState == "stopped" || service.EffectiveState == "disabled" ||
-			service.EffectiveState == "failed" || service.EffectiveState == "unavailable"
-		if !stopped || service.Ownership.PGID != nil || service.GenerationLease != "none" {
-			return fmt.Errorf("Syncthing service is not proven absent (state %s, lease %s)",
-				service.EffectiveState, service.GenerationLease)
-		}
-		return nil
+	stopped := response.EffectiveState == "stopped" || response.EffectiveState == "disabled" ||
+		response.EffectiveState == "failed" || response.EffectiveState == "unavailable"
+	if !stopped || response.Ownership.PGID != nil || response.GenerationLease != "none" {
+		return fmt.Errorf("Syncthing service is not proven absent (state %s, lease %s)",
+			response.EffectiveState, response.GenerationLease)
 	}
-	return errors.New("Syncthing service is not present in CTL-1")
+	return nil
 }
 
 func writeControlFrame(writer io.Writer, payload []byte) error {
