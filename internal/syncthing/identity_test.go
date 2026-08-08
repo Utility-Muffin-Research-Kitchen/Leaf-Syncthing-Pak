@@ -2,6 +2,8 @@ package syncthing
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -94,6 +96,74 @@ func TestEnsureIdentityDiscardsOrphanStagingDirectories(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "config", "stale")); !os.IsNotExist(err) {
 		t.Fatalf("orphan content was promoted: %v", err)
+	}
+}
+
+func TestEnsureIdentityConvergesAtBothGenerationFlushBoundaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX shell")
+	}
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("flush-%d", failAt), func(t *testing.T) {
+			root := t.TempDir()
+			callLog := filepath.Join(root, "generate.calls")
+			t.Setenv("LEAF_SYNCTHING_FAKE_CALL_LOG", callLog)
+			options := IdentityOptions{
+				Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
+				DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+				GUISocket: filepath.Join(root, "runtime", "syncthing-gui.sock"),
+			}
+			syncCall := 0
+			injected := errors.New("injected generation flush failure")
+			options.SyncFilesystem = func(string) error {
+				syncCall++
+				if syncCall == failAt {
+					return injected
+				}
+				return nil
+			}
+			if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); !errors.Is(err, injected) {
+				t.Fatalf("generation error = %v, want %v", err, injected)
+			}
+
+			before := map[string][]byte{}
+			if failAt == 1 {
+				if _, err := os.Lstat(options.ConfigDir); !os.IsNotExist(err) {
+					t.Fatalf("pre-promotion failure left final config: %v", err)
+				}
+			} else {
+				for _, name := range []string{"cert.pem", "key.pem", GenerationMarkerName} {
+					contents, err := os.ReadFile(filepath.Join(options.ConfigDir, name))
+					if err != nil {
+						t.Fatal(err)
+					}
+					before[name] = contents
+				}
+			}
+
+			recovery, err := RecoverConfig(options.ConfigDir, func(string) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.SyncFilesystem = func(string) error { return nil }
+			if _, err := EnsureIdentity(context.Background(), options, recovery); err != nil {
+				t.Fatal(err)
+			}
+			calls, err := os.ReadFile(callLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCalls := 3 - failAt
+			if got := strings.Count(string(calls), "generate\n"); got != wantCalls {
+				t.Fatalf("generate calls = %d, want %d", got, wantCalls)
+			}
+			for name, want := range before {
+				got, err := os.ReadFile(filepath.Join(options.ConfigDir, name))
+				if err != nil || string(got) != string(want) {
+					t.Fatalf("promoted %s changed during recovery: %v", name, err)
+				}
+			}
+		})
 	}
 }
 
@@ -373,6 +443,9 @@ for arg in "$@"; do
 done
 case "$command" in
     generate)
+        if test -n "${LEAF_SYNCTHING_FAKE_CALL_LOG:-}"; then
+            printf '%s\n' generate >>"$LEAF_SYNCTHING_FAKE_CALL_LOG"
+        fi
         mkdir -p "$config" "$data"
         if test -s "$config/config.xml"; then
             sed 's/version="[0-9][0-9]*"/version="52"/' "$config/config.xml" >"$config/config.xml.next"

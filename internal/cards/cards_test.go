@@ -98,6 +98,35 @@ func TestEnrollmentSyncFailureConvergesWithoutRegeneration(t *testing.T) {
 	}
 }
 
+func TestEnrollmentDiscardsTemporaryInsteadOfAdoptingIt(t *testing.T) {
+	for name, temporary := range map[string]string{
+		"partial":  "partial",
+		"complete": `{"version":1,"id":"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"}` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := testSource(t, "primary")
+			root := filepath.Join(source.UserdataPath, leaf.AppStateName)
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			temporaryPath := filepath.Join(root, TemporaryName)
+			if err := os.WriteFile(temporaryPath, []byte(temporary), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			identity, created, err := Enroll(source, Options{
+				MountInfo: mountInfo(source.Root, "rw"), Random: bytes.NewReader(bytes.Repeat([]byte{0xa5}, 16)),
+				SyncFilesystem: func(string) error { return nil },
+			})
+			if err != nil || !created || identity.ID != strings.Repeat("a5", 16) {
+				t.Fatalf("recovered enrollment = %+v created=%v error=%v", identity, created, err)
+			}
+			if _, err := os.Lstat(temporaryPath); !os.IsNotExist(err) {
+				t.Fatalf("temporary remained: %v", err)
+			}
+		})
+	}
+}
+
 func TestEnrollmentRefusesAbsentReadOnlyAndInvalidIdentity(t *testing.T) {
 	source := testSource(t, "primary")
 	if _, _, err := Enroll(source, Options{MountInfo: []byte{}}); !errors.Is(err, ErrUnavailable) {

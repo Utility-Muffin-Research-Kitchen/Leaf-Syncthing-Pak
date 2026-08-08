@@ -1,6 +1,7 @@
 package syncthing
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,5 +104,29 @@ func TestApplyOfflinePauseSetEmptySetStillValidatesConfig(t *testing.T) {
 	}
 	if _, err := ApplyOfflinePauseSet(directory, nil, func(string) error { return nil }); err == nil {
 		t.Fatal("empty pause set accepted an unparseable config")
+	}
+}
+
+func TestApplyOfflinePauseSetConvergesAfterPromotionFlushFailure(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config.xml")
+	config := `<configuration version="52"><folder id="managed"><paused>false</paused></folder><options><setLowPriority>false</setLowPriority></options></configuration>`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected promoted-config flush failure")
+	if _, err := ApplyOfflinePauseSet(directory, map[string]bool{"managed": true}, func(string) error { return injected }); !errors.Is(err, injected) {
+		t.Fatalf("pause edit error = %v, want %v", err, injected)
+	}
+	recovery, err := RecoverConfig(directory, func(string) error { return nil })
+	if err != nil || recovery.State != RecoveryReady {
+		t.Fatalf("recovery = %+v, %v", recovery, err)
+	}
+	result, err := ApplyOfflinePauseSet(directory, map[string]bool{"managed": true}, func(string) error {
+		t.Fatal("converged config unexpectedly required another transaction")
+		return nil
+	})
+	if err != nil || result.Changed {
+		t.Fatalf("converged pause edit = %+v, %v", result, err)
 	}
 }
