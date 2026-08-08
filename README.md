@@ -23,7 +23,9 @@ commit, and inspects the archive layout without extracting it.
 
 The current package is intentionally labeled `0.0.0-b0a`: it contains the
 verified upstream binary and the read-only HTTPS gateway qualification spike,
-but not the production controller or Catastrophe UI planned for B1–B3. Its
+plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
+and canonical cross-language fixture tests, but not the production controller
+or Catastrophe UI planned for B1–B3. Its
 launcher exits with an explicit qualification-only message so a staged spike
 cannot be mistaken for the finished app. `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will

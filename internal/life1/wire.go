@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 )
 
 const (
@@ -64,4 +66,51 @@ func Decode(frame []byte) (json.RawMessage, error) {
 		return nil, ErrInvalidJSON
 	}
 	return append(json.RawMessage(nil), payload...), nil
+}
+
+// Read reads one complete frame without allocating beyond the LIFE-1 semantic
+// ceiling. The generic Jawaka transport permits larger frames, but those are a
+// protocol error for this connection.
+func Read(reader io.Reader) (json.RawMessage, error) {
+	var prefix [framePrefixBytes]byte
+	if _, err := io.ReadFull(reader, prefix[:]); err != nil {
+		return nil, err
+	}
+
+	declared := binary.BigEndian.Uint32(prefix[:])
+	if declared > TransportMaxPayload {
+		return nil, ErrTransportLimit
+	}
+	if declared > SemanticMaxPayload {
+		return nil, ErrSemanticLimit
+	}
+
+	payload := make([]byte, int(declared))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, fmt.Errorf("life1: read payload: %w", err)
+	}
+	if !json.Valid(payload) {
+		return nil, ErrInvalidJSON
+	}
+	return json.RawMessage(payload), nil
+}
+
+// Write writes one complete frame, retrying short writes rather than assuming
+// a Unix socket accepts it atomically.
+func Write(writer io.Writer, message json.RawMessage) error {
+	frame, err := Encode(message)
+	if err != nil {
+		return err
+	}
+	for len(frame) > 0 {
+		written, err := writer.Write(frame)
+		if err != nil {
+			return err
+		}
+		if written <= 0 || written > len(frame) {
+			return io.ErrShortWrite
+		}
+		frame = frame[written:]
+	}
+	return nil
 }
