@@ -1,6 +1,6 @@
 # B1 controller qualification record
 
-**Status:** In progress; controller/upstream, card, migration, and folder-conflict gates passed
+**Status:** In progress; controller/upstream, card, migration, folder-conflict, and guardian gates passed
 
 **Date:** 2026-08-08
 
@@ -16,9 +16,11 @@
 
 **Managed-folder/conflict commit:** `6e6318f0fd86d079e36c66c6bd19bb4da6a5533f`
 
+**Transitive guardian commit:** `7425c10f3c5759956eb8bfdf3cbf889cf2cf491e`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
-**Contract pin:** `5ab17d82c122b481f15c835e6ff9a21829d45aa9`
+**Contract pin:** `dcdd0eff6961264dac60f4a951e3706d3d1ddc9d`
 
 This is the early production-shaped B1 measurement required before card and
 folder work expands the controller. It is not the final B1 completion record.
@@ -36,16 +38,20 @@ The cgo-disabled `leaf-syncthing` command now implements the first six ordered
    config/data directories, or migrate an older existing config only through
    disposable copies; validate, flush, promote only `config.xml`, and recheck
    the certificate-derived device id and identity marker;
-6. recognize strict Leaf-managed folder IDs and force every one paused through
-   the recoverable three-file transaction before spawn. B1 creates no folder;
-   B3 owns onboarding and first-sync completion.
+6. recognize strict Leaf-managed folder IDs, force every one paused, and force
+   `setLowPriority=false` through the recoverable three-file transaction before
+   spawn. B1 creates no folder; B3 owns onboarding and first-sync completion.
 
 Factory generation applies the Leaf-owned profile while the config is still an
 uncommitted staging tree. Its token rewrite preserves unknown XML while setting
 the private GUI Unix socket and `0600` socket permissions, disabling global
 discovery, relays, NAT traversal, usage/crash reporting, browser launch, and
 auto-upgrade, and retaining local discovery/direct sync. Runtime also passes
-`--no-upgrade`, `--no-restart`, and the current Unix GUI address.
+`--no-upgrade`, `--no-restart`, and the current Unix GUI address. The explicit
+`setLowPriority=false` prevents upstream's Linux priority helper from moving the
+main process into a new process group; without it Jawaka's reserved group would
+contain only the controller and monitor. This safety scalar is also enforced by
+the only permitted committed-config offline transaction on every startup.
 
 The upstream runner checks for a foreign Syncthing process or conventional GUI
 listener before spawn. On conflict the controller remains available on its
@@ -55,7 +61,9 @@ it starts the monitor/main tree in the reserved process group with child
 actual socket type/mode. It never restarts upstream inside the same generation.
 Normal stop requests graceful API shutdown and proves the remaining group
 empty; guardian cleanup signals every other group member, escalates survivors,
-and proves non-zombie absence before the controller returns.
+and proves non-zombie absence before the controller returns. Device evidence
+requires the controller, monitor, and main process to share the controller's
+reserved process-group id.
 
 After upstream readiness, the controller now serves the package-private UI
 socket at `control.sock`, independently of the upstream admin socket. The
@@ -131,6 +139,23 @@ verified that no fixture process or mount remained.
   run after adding a default `.stfolder` kept it paused and reported the
   folder-scoped `foreign-folder-manager` error. No folder or marker was created
   by the controller.
+- The destructive guardian matrix used the same managed Saves binding with
+  2,000 files plus a bounded 50,000-write mutator. Each failure was injected
+  only after the Syncthing main process accumulated active CPU ticks from the
+  scan workload.
+- Killing the controller left its monitor/main generation for Jawaka to stop
+  and verify. Killing the direct monitor made the controller report failure
+  and exit while Jawaka contained the surviving main process. In both cases
+  all three old PIDs disappeared before exactly one new controller/monitor/main
+  generation reached `running`; the observer found no overlap.
+- Killing Jawaka exercised the controller-owned guardian. The fixture first
+  restarted the private API to close its pooled connection, then removed only
+  the isolated socket pathname so the cleanup deadline was observable. A new
+  Jawaka daemon reported `stale-generation`; the old controller still held fd
+  3 at the exact generation-lease path while both upstream processes lived,
+  and no replacement controller existed. After the controller escalated and
+  proved the old group absent, the fixture restored its isolated API flag and
+  exactly one replacement generation started.
 - A separate opt-in device test generated/promoted/revalidated the same
   transaction on the real FAT-backed `$USERDATA_PATH`, using real Linux
   `syncfs`; it then removed its exact test root and temporary binaries.
@@ -178,7 +203,6 @@ the measured resident controller increment here is about 6.9 MiB.
 
 ## Remaining B1 work
 
-- exercise controller death, direct-upstream death, and Jawaka death/restart
-  guardian cases with an active upstream workload;
-- repeat the relevant footprint and removal checks once real card bindings and
-  folders exist, including the required write-boundary failure matrix.
+- complete card-id and clean identity/config write-boundary fault injection;
+- repeat the physical scan/receive/rename/versioning removal matrix through the
+  real controller, then run final footprint, secret, and staging audits.
