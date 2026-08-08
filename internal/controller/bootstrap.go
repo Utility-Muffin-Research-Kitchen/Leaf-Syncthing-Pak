@@ -37,6 +37,7 @@ type Config struct {
 	DataDir         string
 	UpstreamBinary  string
 	UpstreamVersion string
+	GUISocket       string
 	DaemonSocket    string
 	Mode            life1.Mode
 	AckMS           int
@@ -88,6 +89,7 @@ func LoadConfig() (Config, error) {
 		DataDir:         filepath.Join(environment.StateDir(), "data"),
 		UpstreamBinary:  filepath.Join(filepath.Dir(executable), "syncthing"),
 		UpstreamVersion: PinnedUpstreamVersion,
+		GUISocket:       filepath.Join(environment.RuntimePath, "services", ServiceDirName, "syncthing-gui.sock"),
 		DaemonSocket:    socket,
 		Mode:            life1.ModeNotify,
 		AckMS:           life1.DefaultAckMS,
@@ -179,6 +181,7 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 	identity, err := ensureIdentity(ctx, syncthingconfig.IdentityOptions{
 		Binary: runner.Config.UpstreamBinary, ConfigDir: runner.Config.ConfigDir,
 		DataDir: runner.Config.DataDir, UpstreamVersion: runner.Config.UpstreamVersion,
+		GUISocket: runner.Config.GUISocket,
 	}, recovery)
 	if err != nil {
 		_ = lifecycle.Close()
@@ -207,7 +210,7 @@ func (session *Session) Close() error {
 
 func (config Config) validate() error {
 	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
-		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.DaemonSocket == "" {
+		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.GUISocket == "" || config.DaemonSocket == "" {
 		return errors.New("leaf-syncthing: runtime, userdata, config, data, upstream, and daemon values are required")
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {

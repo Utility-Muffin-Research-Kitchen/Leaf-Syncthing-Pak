@@ -192,6 +192,7 @@ func testConfig(t *testing.T) Config {
 		DataDir:         filepath.Join(userdata, leaf.AppStateName, "data"),
 		UpstreamBinary:  filepath.Join(base, "syncthing"),
 		UpstreamVersion: PinnedUpstreamVersion,
+		GUISocket:       filepath.Join(base, "runtime", "services", ServiceDirName, "syncthing-gui.sock"),
 		DaemonSocket:    filepath.Join(base, "jawakad.sock"),
 		Mode:            life1.ModeNotify, AckMS: life1.DefaultAckMS,
 	}

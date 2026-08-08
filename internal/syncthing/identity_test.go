@@ -21,6 +21,7 @@ func TestEnsureIdentityGeneratesPromotesAndRevalidates(t *testing.T) {
 	options := IdentityOptions{
 		Binary: binary, ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket: filepath.Join(root, "runtime", "syncthing-gui.sock"),
 	}
 	syncCalls := 0
 	options.SyncFilesystem = func(path string) error {
@@ -84,6 +85,7 @@ func TestEnsureIdentityDiscardsOrphanGenerationDirectories(t *testing.T) {
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
 	if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); err != nil {
@@ -102,6 +104,7 @@ func TestEnsureIdentityRefusesMarkerMismatchAndOldVersion(t *testing.T) {
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
 	if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); err != nil {
@@ -144,6 +147,7 @@ func TestEnsureIdentityRejectsSymlinkedGeneratedFile(t *testing.T) {
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
 	if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); err != nil {
@@ -173,6 +177,7 @@ func TestEnsureIdentityRefusesExistingFactoryConfig(t *testing.T) {
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
 	if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); err == nil {
@@ -208,6 +213,7 @@ func TestDeviceFactoryIdentity(t *testing.T) {
 	options := IdentityOptions{
 		Binary: binary, ConfigDir: filepath.Join(root, "config"),
 		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		GUISocket: "/tmp/leaf-syncthing-identity-device-test/syncthing-gui.sock",
 	}
 	generated, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean})
 	if err != nil {
@@ -240,7 +246,7 @@ done
 case "$command" in
     generate)
         mkdir -p "$config" "$data"
-        printf '%s\n' '<configuration version="52"><device id="` + testDeviceID + `"></device><gui enabled="true"><address>127.0.0.1:8384</address><apikey>fixture-api-key</apikey></gui></configuration>' >"$config/config.xml"
+        printf '%s\n' '<configuration version="52"><device id="` + testDeviceID + `"></device><gui enabled="true"><address>127.0.0.1:8384</address><apikey>fixture-api-key</apikey></gui><options></options></configuration>' >"$config/config.xml"
         printf '%s\n' 'fixture-certificate' >"$config/cert.pem"
         printf '%s\n' 'fixture-private-key' >"$config/key.pem"
         ;;

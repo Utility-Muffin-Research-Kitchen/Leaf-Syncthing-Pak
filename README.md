@@ -27,8 +27,9 @@ verified upstream binary and the read-only HTTPS gateway qualification spike,
 plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
 the first five ordered controller startup steps (including recoverable
 three-file config recovery and same-filesystem identity generation/promotion),
-and canonical cross-language fixture tests, but not the production upstream
-runner or Catastrophe UI planned for B1–B3. Its
+the token-preserving private-socket/LAN-only initial profile, and canonical
+cross-language fixture tests, but not the production upstream runner or
+Catastrophe UI planned for B1–B3. Its
 launcher exits with an explicit qualification-only message so a staged spike
 cannot be mistaken for the finished app. `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will
