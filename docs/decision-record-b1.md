@@ -1,8 +1,7 @@
 # B1 controller qualification record
 
-**Status:** In progress; controller/upstream, card, migration, folder-conflict,
-guardian, write-boundary, package, and software-audit gates passed; physical
-removal remains
+**Status:** Complete; all B1 implementation, package, software-audit, physical
+removal, recovery, and configured-folder resource gates passed
 
 **Date:** 2026-08-08
 
@@ -24,22 +23,26 @@ removal remains
 
 **B1 package commit:** `28fde1d048ef2280df42979f95213e242041ed59`
 
+**Controller license commit:** `81e19ccea8605cea9f2f80075db9a54fef20e9f2`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
-**Contract pin:** `29cf72babbede581d1efa1f669fe286c11544ce1`
+**Contract pin:** `312594951ab54d11100df4421aee44015374ddb7`
 
-This is the early production-shaped B1 measurement required before card and
-folder work expands the controller. It is not the final B1 completion record.
+This is the final B1 completion record and handoff to B0b, B2, and B3.
 
 ## B1 development package
 
 `make package-mlp1` now builds the cgo-disabled controller rather than the B0a
 gateway spike. The `0.0.0-b1` manifest carries the normative SVC-1 service and
 retained-state declarations, and its service path resolves to the packaged
-`bin/leaf-syncthing`. The deterministic ZIP contains exactly six regular,
+`bin/leaf-syncthing`. The deterministic ZIP contains exactly seven regular,
 FAT-safe files: controller, pinned upstream, foreground development launcher,
-manifest, upstream license, and upstream lock/evidence. The B0a gateway remains
-source-only qualification evidence and is absent from the package.
+manifest, controller MIT license, upstream MPL-2.0 license, and upstream
+lock/evidence. The B0a gateway remains source-only qualification evidence and
+is absent from the package. A clean repeated build produced byte-identical
+archives with SHA-256
+`95cdb865c7a77336aacf59a3041cefa7b9ef57167b30bc14bbaabe296da7b88d`.
 
 ## Implemented startup boundary
 
@@ -212,26 +215,45 @@ userdata roots named `.userdata/mlp1-b1-card-smoke`:
 - cleanup removed both exact temporary roots and the remote test binary, and
   the live `loong_pangu` process remained running.
 
-### Physical-removal preflight (not a pass)
+### Physical-removal qualification
 
-The connected base-0.9.0 device currently presents these two writable vfat
-volumes, both labeled `MLP1FRESH0`:
+The maintainer declared both cards expendable. The real controller ran under an
+isolated current Jawaka daemon on the connected base-0.9.0 device. Its package,
+durable controller state, and standalone sender lived on the unpulled 64 GB
+card; the enrolled receive-only Saves binding and same-card version store lived
+on the pulled 256 GB card:
 
-- `/mnt/sdcard`: 256 GB-class `/dev/mmcblk3p1`, CID
-  `035344534d323536876cb5ce05019957`, about 58 GB used;
-- `/media/sdcard1`: 64 GB-class `/dev/mmcblk1p1`, CID
-  `0034323030303030000000008a0186c5`, about 1 GB used.
+- target: `/mnt/sdcard`, `/dev/mmcblk3p1`, CID
+  `035344534d323536876cb5ce05019957`;
+- unpulled source: `/media/sdcard1`, `/dev/mmcblk1p1`, CID
+  `0034323030303030000000008a0186c5`.
 
-A root-only bind view shows both covered mountpoint directories are empty but
-mutable. As expected for this stock base, `/usr/bin/umrk-mount-stubs` is absent.
-The exact B0a-qualified helper at
+Before the first pull, the exact B0a-qualified `umrk-mount-stubs` helper from
 `miniloong-launcher-switcher@f13980c4807ab977e85c4085da680209af0f977d`
-has SHA-256 `8185bd4b3efe32cc6f9ffed050fe36054511a81f74bd7d1f94ce04aa901d0a0f`;
-it passes shell syntax and can be streamed directly for a temporary lock before
-the first pull. `fsck.vfat`, `chattr`, `lsattr`, `mount`, `umount`, and `sync`
-are present. No lock or destructive card write was performed because unsafe FAT
-removal can damage unrelated data across the whole volume and the current cards
-have not been declared expendable.
+(SHA-256 `8185bd4b3efe32cc6f9ffed050fe36054511a81f74bd7d1f94ce04aa901d0a0f`)
+temporarily made both empty rootfs mount stubs immutable. During every removal,
+a non-recursive bind view of `/` showed zero entries beneath both covered
+mountpoints, retained the immutable attributes, and rejected a root write.
+Jawaka detected target loss, stopped the whole supervised generation, and
+restarted the controller after reinsertion with the managed folder paused for
+`first-sync`.
+
+| Pull case | State immediately before pull | Result after reinsertion | FAT recovery | Verdict |
+| --- | --- | --- | --- | --- |
+| Scan | Active scan of a 2 GiB target file | Controller restarted; binding paused | Dirty bit cleared; no lost chains | Pass |
+| Receive | `state=syncing`; global 2,684,354,560 bytes, local 2,335,604,736 bytes, 536,870,912 bytes needed | Controller restarted; binding paused | Dirty bit cleared; no lost chains | Pass |
+| Rename | 5,000-file baseline; individual rename churn had 4,016 old names and one new name visible | Consistent mixed interrupted state: 3,798 old and 956 new names; binding paused | 738 chains / 24,182,784 bytes reclaimed; dirty bit cleared | Pass |
+| Versioning | 5,000-file baseline; 100 archives already present with 4,993 updates pending | 264 archived versions retained; binding paused | 165 chains / 5,406,720 bytes reclaimed; dirty bit cleared | Pass |
+
+The post-versioning control response reported recovery `ready`, both cards
+present/writable, the exact enrolled-card binding paused only for `first-sync`,
+and no controller or folder issue. The final rootfs bind check again found both
+underlays empty, immutable, and write-rejecting while the cards were mounted.
+Cleanup stopped the service and isolated daemon, removed only the three exact
+fixture roots, restored both rootfs stubs to their original mutable state,
+confirmed both cards mounted read/write, and resumed the original
+`loong_pangu` process. No fixture process, path, bind mount, or root-view mount
+remained.
 
 ## Ten-minute idle gate
 
@@ -260,6 +282,25 @@ capacity. The earlier B0a 104,300 KiB upstream result included configured
 folders/peer activity and is not a like-for-like controller-overhead number;
 the measured resident controller increment here is about 6.9 MiB.
 
+### Final configured-folder footprint
+
+After the physical-removal matrix and final FAT repair, the controller ran for
+602 seconds with 119 five-second observations against the real two-card PATH-2
+configuration. The enrolled receive-only Saves folder and explicit same-card
+simple version store remained paused for `first-sync`; no standalone sender or
+foreign Syncthing was running.
+
+| Process set | Average RSS | Maximum RSS | CPU (% of one core) |
+| --- | ---: | ---: | ---: |
+| Controller | 8,122 KiB | 9,200 KiB | 0.2126% |
+| Upstream monitor + main | 46,039 KiB | 48,796 KiB | 0.2342% |
+| Combined | — | **57,996 KiB (56.6 MiB)** | **0.4468%** |
+
+Verdict: pass. The real configured-folder maximum remained below the preferred
+80 MiB budget and showed no growth trend. Combined idle CPU was about 0.112% of
+the four-core device's total capacity. Jawaka reported zero restarts throughout
+the final run.
+
 ## Software-only closeout audits
 
 - `make test`, `go test -race ./...`, `go vet ./...`, standalone C fixture
@@ -273,11 +314,11 @@ the measured resident controller increment here is about 6.9 MiB.
   of default `STAGE_APPS`, required bootstrap repos, and `managed_apps`.
   The actual August 7 Release A SD ZIP also contains no Syncthing pak, path, or
   manifest entry.
-- The repository does not yet declare a license for the UMRK controller code;
-  selecting that license is a maintainer decision before B1 can be finalized.
+- The UMRK controller and packaging code are MIT licensed. The deterministic
+  pak carries that license separately from upstream Syncthing's MPL-2.0 notice.
 
 ## Remaining B1 work
 
-- select and package the UMRK controller license;
-- repeat the physical scan/receive/rename/versioning removal matrix through the
-  real controller, then record the final configured-folder footprint.
+None. B1 is complete; B0b and B2 may proceed against this frozen controller and
+private control-socket contract, while B3 owns onboarding and first-sync
+completion.
