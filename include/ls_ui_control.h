@@ -8,6 +8,7 @@
 #define LS_UI_MAX_FOLDERS 32
 #define LS_UI_MAX_ISSUES 64
 #define LS_UI_MAX_CAPABILITIES 32
+#define LS_UI_MAX_NETWORKS 32
 
 typedef struct {
     char code[64];
@@ -56,6 +57,11 @@ typedef struct {
     char game_source_id[64];
     char recovery_state[32];
     bool recovery_changed;
+    bool network_present;
+    char network_profile[32];
+    char allowed_networks[LS_UI_MAX_NETWORKS][64];
+    int allowed_network_count;
+    bool network_route_changed;
     ls_ui_card cards[LS_UI_MAX_CARDS];
     int card_count;
     ls_ui_folder folders[LS_UI_MAX_FOLDERS];
@@ -75,6 +81,11 @@ int ls_ui_card_enroll(const char *socket_path,
                       ls_ui_status *status,
                       char *error,
                       size_t error_size);
+int ls_ui_network_profile_set(const char *socket_path,
+                              const char *profile,
+                              ls_ui_status *status,
+                              char *error,
+                              size_t error_size);
 int ls_ui_parse_response(const char *payload,
                          size_t payload_size,
                          const char *request_id,

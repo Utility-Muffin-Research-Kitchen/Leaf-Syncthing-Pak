@@ -48,11 +48,20 @@ int main(void) {
                                 error, sizeof(error)) == -1);
     free(payload);
 
+    payload = read_fixture("network-profile-set-response.json", &size);
+    assert(ls_ui_parse_response(payload, size, "fixture-network", &status,
+                                error, sizeof(error)) == 0);
+    assert(status.network_present);
+    assert(strcmp(status.network_profile, "lan-only") == 0);
+    assert(status.allowed_network_count == 2);
+    assert(strcmp(status.allowed_networks[1], "2001:db8::/64") == 0);
+    free(payload);
+
     payload = read_fixture("unsupported-op-response.json", &size);
     assert(ls_ui_parse_response(payload, size, "fixture-unsupported", &status,
                                 error, sizeof(error)) == 1);
     assert(strcmp(error, "unsupported UI control operation") == 0);
     free(payload);
-    puts("PASS ui-control-v1 C semantic client (2 fixtures)");
+    puts("PASS ui-control-v1 C semantic client (3 fixtures)");
     return 0;
 }

@@ -27,6 +27,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *upstream;
     const cJSON *game;
     const cJSON *recovery;
+    const cJSON *network;
     const cJSON *cards;
     const cJSON *folders;
     const cJSON *issues;
@@ -60,6 +61,25 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     value = cJSON_GetObjectItemCaseSensitive(recovery, "changed");
     if (!cJSON_IsBool(value)) return -1;
     status->recovery_changed = cJSON_IsTrue(value);
+
+    network = cJSON_GetObjectItemCaseSensitive(result, "network");
+    if (network) {
+        const cJSON *allowed;
+        if (!cJSON_IsObject(network) ||
+            ls_copy_json(status->network_profile, sizeof(status->network_profile),
+                         cJSON_GetObjectItemCaseSensitive(network, "profile")) != 0) return -1;
+        allowed = cJSON_GetObjectItemCaseSensitive(network, "allowed_networks");
+        if (!cJSON_IsArray(allowed) || cJSON_GetArraySize(allowed) > LS_UI_MAX_NETWORKS) return -1;
+        status->allowed_network_count = cJSON_GetArraySize(allowed);
+        for (index = 0; index < status->allowed_network_count; index++) {
+            if (ls_copy_json(status->allowed_networks[index], sizeof(status->allowed_networks[index]),
+                             cJSON_GetArrayItem(allowed, index)) != 0) return -1;
+        }
+        value = cJSON_GetObjectItemCaseSensitive(network, "route_changed");
+        if (!cJSON_IsBool(value)) return -1;
+        status->network_route_changed = cJSON_IsTrue(value);
+        status->network_present = true;
+    }
 
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
     folders = cJSON_GetObjectItemCaseSensitive(result, "folders");
@@ -210,7 +230,7 @@ static int ls_ui_exchange(const char *socket_path,
     arguments = NULL;
     encoded = cJSON_PrintUnformatted(request);
     if (!encoded || ls_frame_request(socket_path, encoded, strlen(encoded),
-                                     &response_payload, &response_size, 2000) != 0) {
+                                     &response_payload, &response_size, 10000) != 0) {
         ls_error(error, error_size, "Syncthing controller is unavailable");
         goto done;
     }
@@ -240,6 +260,21 @@ int ls_ui_card_enroll(const char *socket_path, const char *source_id,
         return -1;
     }
     return ls_ui_exchange(socket_path, "card.enroll", arguments,
+                          status, error, error_size);
+}
+
+int ls_ui_network_profile_set(const char *socket_path, const char *profile,
+                              ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !profile ||
+        (strcmp(profile, "lan-only") != 0 && strcmp(profile, "sync-anywhere") != 0) ||
+        !cJSON_AddStringToObject(arguments, "profile", profile) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) {
+        cJSON_Delete(arguments);
+        ls_error(error, error_size, "Could not create network request");
+        return -1;
+    }
+    return ls_ui_exchange(socket_path, "network.profile.set", arguments,
                           status, error, error_size);
 }
 

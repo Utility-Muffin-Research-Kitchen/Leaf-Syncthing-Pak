@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 5 {
-		t.Fatalf("checked %d fixtures, want 5", checked)
+	if checked != 7 {
+		t.Fatalf("checked %d fixtures, want 7", checked)
 	}
 }
 
@@ -159,6 +159,32 @@ func TestEnrollCardOperation(t *testing.T) {
 	response = operations.Handle([]byte(`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"../bad"}}`))
 	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 		t.Fatalf("unsafe source response = %+v", response)
+	}
+}
+
+func TestNetworkProfileOperationRequiresConfirmation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		SetNetworkProfile: func(profile string) (Status, *ProtocolError) {
+			called = profile
+			status := fixtureStatus()
+			status.Network = &NetworkStatus{Profile: profile, AllowedNetworks: []string{}}
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"sync-anywhere","confirmed":true}}`))
+	if !response.OK || called != "sync-anywhere" || response.Result == nil || response.Result.Network == nil {
+		t.Fatalf("network response = %+v, called=%q", response, called)
+	}
+	for _, request := range []string{
+		`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"sync-anywhere","confirmed":false}}`,
+		`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"private-addresses","confirmed":true}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe network response = %+v", response)
+		}
 	}
 }
 

@@ -218,14 +218,42 @@ static int ls_service_running(const ls_ctl1_status *status) {
          strcmp(status->effective_state, "backoff") == 0);
 }
 
+static void ls_change_network(ls_app *app) {
+    const char *next;
+    const char *message;
+    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Cancel"},
+                                {.button = CAT_BTN_A, .label = "Change", .is_confirm = true}};
+    cat_message_opts options;
+    cat_confirm_result result = {0};
+    if (!app->status.network_present ||
+        !ls_ui_has_capability(&app->status, "network.profile.set")) {
+        ls_message("Network profile control is unavailable.");
+        return;
+    }
+    if (strcmp(app->status.network_profile, "lan-only") == 0) {
+        next = "sync-anywhere";
+        message = "Enable Sync Anywhere? Syncthing may contact internet discovery and relay services, use more radio and battery, and ask your router for port mappings.";
+    } else {
+        next = "lan-only";
+        message = "Restore LAN-only? Connections outside directly connected networks will be closed immediately.";
+    }
+    options = (cat_message_opts){.message = message, .footer = footer, .footer_count = 2};
+    (void)cat_confirmation(&options, &result);
+    if (!result.confirmed) return;
+    if (ls_ui_network_profile_set(app->control_socket, next, &app->status,
+                                  app->error, sizeof(app->error)) != 0) {
+        ls_message(app->error);
+    }
+}
+
 static void ls_run_overview(ls_app *app) {
     int focus = 0;
     int scroll = 0;
     for (;;) {
         cat_option enabled_options[] = {{.label = "Off", .value = "Off"},
                                         {.label = "On", .value = "On"}};
-        cat_option value_options[5];
-        cat_options_item items[7];
+        cat_option value_options[6];
+        cat_options_item items[8];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Exit"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
@@ -259,15 +287,20 @@ static void ls_run_overview(ls_app *app) {
             value_options[1] = (cat_option){.label = card_value, .value = card_value};
             value_options[2] = (cat_option){.label = folder_value, .value = folder_value};
             value_options[3] = (cat_option){.label = app->status.upstream_version, .value = app->status.upstream_version};
-            value_options[4] = (cat_option){.label = issue_value, .value = issue_value};
+            value_options[4] = (cat_option){
+                .label = app->status.network_present ? app->status.network_profile : "unavailable",
+                .value = app->status.network_present ? app->status.network_profile : "unavailable"};
+            value_options[5] = (cat_option){.label = issue_value, .value = issue_value};
             items[item_count++] = (cat_options_item){.label = "Cards", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[1], .option_count = 1};
             items[item_count++] = (cat_options_item){.label = "Folders", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[2], .option_count = 1};
             items[item_count++] = (cat_options_item){.label = "My Device", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[3], .option_count = 1};
-            items[item_count++] = (cat_options_item){.label = "Issues", .type = CAT_OPT_CLICKABLE,
+            items[item_count++] = (cat_options_item){.label = "Network", .type = CAT_OPT_CLICKABLE,
                 .options = &value_options[4], .option_count = 1};
+            items[item_count++] = (cat_options_item){.label = "Issues", .type = CAT_OPT_CLICKABLE,
+                .options = &value_options[5], .option_count = 1};
         }
         options.title = "Syncthing";
         options.items = items;
@@ -313,6 +346,8 @@ static void ls_run_overview(ls_app *app) {
                      app->status.upstream_version, app->status.device_id);
             ls_message(detail);
         } else if (app->controller_available && focus == 6) {
+            ls_change_network(app);
+        } else if (app->controller_available && focus == 7) {
             ls_show_issues(app);
         }
     }

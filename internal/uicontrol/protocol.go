@@ -13,6 +13,7 @@ const (
 	Version             = 1
 	OperationGet        = "status.get"
 	OperationEnrollCard = "card.enroll"
+	OperationNetworkSet = "network.profile.set"
 	MaxIdentifier       = 64
 )
 
@@ -41,10 +42,17 @@ type Status struct {
 	Upstream     UpstreamStatus `json:"upstream"`
 	Game         GameStatus     `json:"game"`
 	Recovery     RecoveryStatus `json:"recovery"`
+	Network      *NetworkStatus `json:"network,omitempty"`
 	Cards        []CardStatus   `json:"cards"`
 	Folders      []FolderStatus `json:"folders"`
 	Issues       []Issue        `json:"issues"`
 	Capabilities []string       `json:"capabilities"`
+}
+
+type NetworkStatus struct {
+	Profile         string   `json:"profile"`
+	AllowedNetworks []string `json:"allowed_networks"`
+	RouteChanged    bool     `json:"route_changed"`
 }
 
 type UpstreamStatus struct {
@@ -105,8 +113,9 @@ type Issue struct {
 }
 
 type Operations struct {
-	Status     func() Status
-	EnrollCard func(string) (Status, *ProtocolError)
+	Status            func() Status
+	EnrollCard        func(string) (Status, *ProtocolError)
+	SetNetworkProfile func(string) (Status, *ProtocolError)
 }
 
 // Handle validates one request and returns one bounded response. Request
@@ -154,6 +163,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationNetworkSet:
+		if operations.SetNetworkProfile == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		profile, err := decodeNetworkProfileArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "network.profile.set requires a confirmed profile")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.SetNetworkProfile(profile)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	default:
 		return failure(responseID, "unsupported-op", "unsupported UI control operation")
 	}
@@ -162,6 +184,23 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		return failure(responseID, "internal", "controller status unavailable")
 	}
 	return Response{Version: Version, ID: responseID, OK: true, Result: &status}
+}
+
+func decodeNetworkProfileArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		Profile   string `json:"profile"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		(arguments.Profile != "lan-only" && arguments.Profile != "sync-anywhere") {
+		return "", errors.New("invalid network profile arguments")
+	}
+	return arguments.Profile, nil
 }
 
 func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
@@ -242,6 +281,12 @@ func (status *Status) normalize() {
 	if status.Capabilities == nil {
 		status.Capabilities = []string{}
 	}
+	if status.Network != nil {
+		status.Network.AllowedNetworks = append([]string(nil), status.Network.AllowedNetworks...)
+		if status.Network.AllowedNetworks == nil {
+			status.Network.AllowedNetworks = []string{}
+		}
+	}
 	for index := range status.Cards {
 		if status.Cards[index].Issues == nil {
 			status.Cards[index].Issues = []Issue{}
@@ -262,6 +307,9 @@ func (status Status) validate() error {
 		!oneOf(status.Upstream.State, "stopped", "starting", "running", "error", "conflict") ||
 		!oneOf(status.Recovery.State, "ready", "pending", "error") {
 		return errors.New("invalid controller state")
+	}
+	if status.Network != nil && !oneOf(status.Network.Profile, "lan-only", "sync-anywhere") {
+		return errors.New("invalid network profile")
 	}
 	if status.Upstream.State == "running" && (status.Upstream.Version == "" || status.Upstream.DeviceID == "") {
 		return errors.New("incomplete running status")

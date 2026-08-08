@@ -1,0 +1,1 @@
+{"v":1,"id":"fixture-network","op":"network.profile.set","args":{"profile":"lan-only","confirmed":true}}

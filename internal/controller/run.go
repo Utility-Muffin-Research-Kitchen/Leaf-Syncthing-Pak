@@ -63,6 +63,19 @@ func (runner Runner) Run(ctx context.Context) error {
 	if err != nil {
 		upstream = nil
 	}
+	var network *networkManager
+	if networkUpstream, ok := upstream.(networkUpstream); ok {
+		network, err = newNetworkManager(runner.Config.UserdataPath, session.Identity.DeviceID, networkUpstream)
+		if err == nil {
+			networkContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			err = network.Initialize(networkContext)
+			cancel()
+		}
+		if err != nil {
+			_ = shutdownUpstream(upstream)
+			return fmt.Errorf("enforce initial network profile: %w", err)
+		}
+	}
 	loadCards := runner.LoadCards
 	if loadCards == nil {
 		loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
@@ -82,6 +95,11 @@ func (runner Runner) Run(ctx context.Context) error {
 	gameState := session.State
 	var status atomic.Value
 	initialStatus := controlStatus(session, gameState, cardInventory)
+	if network != nil {
+		networkStatus := network.Status()
+		initialStatus.Network = &networkStatus
+		initialStatus.Capabilities = append(initialStatus.Capabilities, uicontrol.OperationNetworkSet)
+	}
 	if !foreignConflict.Empty() {
 		initialStatus.Upstream.State = "conflict"
 		initialStatus.Issues = append(initialStatus.Issues, uicontrol.Issue{
@@ -110,6 +128,21 @@ func (runner Runner) Run(ctx context.Context) error {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The card was enrolled but inventory refresh failed"}
 			}
 			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders)
+			status.Store(updated)
+			return updated, nil
+		},
+		SetNetworkProfile: func(profile string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if network == nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Network control is unavailable"}
+			}
+			networkContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			if err := network.Set(networkContext, profile); err != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The network profile could not be applied safely"}
+			}
+			updated := status.Load().(uicontrol.Status)
+			networkStatus := network.Status()
+			updated.Network = &networkStatus
 			status.Store(updated)
 			return updated, nil
 		},
@@ -143,6 +176,13 @@ func (runner Runner) Run(ctx context.Context) error {
 	if upstream != nil {
 		upstreamDone = upstream.Done()
 	}
+	var networkChanges <-chan time.Time
+	var networkTicker *time.Ticker
+	if network != nil {
+		networkTicker = time.NewTicker(500 * time.Millisecond)
+		defer networkTicker.Stop()
+		networkChanges = networkTicker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -160,6 +200,22 @@ func (runner Runner) Run(ctx context.Context) error {
 				return fmt.Errorf("UI control socket failed (%v); %w", err, shutdownErr)
 			}
 			return fmt.Errorf("UI control socket failed: %w", err)
+		case <-networkChanges:
+			networkContext, networkCancel := context.WithTimeout(ctx, 8*time.Second)
+			changed, refreshErr := network.RefreshIfChanged(networkContext)
+			networkCancel()
+			if refreshErr != nil {
+				if shutdownErr := shutdownUpstream(upstream); shutdownErr != nil {
+					return fmt.Errorf("refresh LAN boundary (%v); %w", refreshErr, shutdownErr)
+				}
+				return fmt.Errorf("refresh LAN boundary: %w", refreshErr)
+			}
+			if changed {
+				updated := status.Load().(uicontrol.Status)
+				networkStatus := network.Status()
+				updated.Network = &networkStatus
+				status.Store(updated)
+			}
 		case result := <-lifecycleEvents:
 			if result.err != nil {
 				if ctx.Err() != nil {

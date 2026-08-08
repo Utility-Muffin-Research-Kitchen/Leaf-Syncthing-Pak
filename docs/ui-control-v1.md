@@ -68,6 +68,7 @@ upstream.version                   pinned Syncthing version
 upstream.device_id                 certificate-derived device id
 game.active/launch_id/source_id    reconciled LIFE-1 state
 recovery.state/changed             ready | pending | error; whether startup recovery changed config
+network.profile/allowed_networks   lan-only | sync-anywhere; current route-derived CIDRs
 cards[]                            enrolled/configured physical-card rows
 folders[]                          managed-folder rows
 issues[]                           display-safe controller/card/folder issues
@@ -104,8 +105,22 @@ matching `card-id`. A replacement card at the remembered mountpoint therefore
 appears as a separate unenrolled row, and duplicate live IDs fail closed.
 
 Generic Run, Stop, and Start-with-Leaf operations remain CTL-1. Folder, peer,
-network, gateway, and reset operations will be added only with the controller
-model that validates and executes them.
+gateway, and reset operations will be added only with the controller model that
+validates and executes them.
+
+## `network.profile.set`
+
+```json
+{"v":1,"id":"network-lan","op":"network.profile.set","args":{"profile":"lan-only","confirmed":true}}
+```
+
+`profile` is exactly `lan-only` or `sync-anywhere`, and `confirmed` must be
+`true`; the device UI owns the explanatory confirmation. LAN-only derives
+`allowed_networks` from current directly connected physical-interface routes.
+The controller applies the D-14 pause → policy update → unpause transition, and
+keeps watching routes while it runs. Sync Anywhere clears the per-peer boundary
+and enables global discovery, relays, and NAT traversal together. Success
+returns the full status result with the applied network profile.
 
 The canonical fixtures live in `tests/fixtures/ui-control-v1/`. `make test`
 round-trips their exact JSON and framing in Go and C.
