@@ -11,7 +11,7 @@ import (
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
-func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inventory []cards.Card) ([]uicontrol.FolderStatus, []uicontrol.Issue) {
+func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inventory []cards.Card, controlState ...map[string]folderControlRecord) ([]uicontrol.FolderStatus, []uicontrol.Issue) {
 	bindings := make(map[string][]cards.Card)
 	for _, card := range inventory {
 		if card.Identity.ID == "" {
@@ -28,11 +28,24 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 	rows := make([]uicontrol.FolderStatus, 0, len(configured))
 	issues := []uicontrol.Issue{}
 	for _, folder := range configured {
+		control := folderControlRecord{FirstSync: true}
+		if len(controlState) > 0 {
+			if stored, ok := controlState[0][folder.ID]; ok {
+				control = stored
+			}
+		}
+		reasons := []string{}
+		if control.Manual {
+			reasons = append(reasons, "manual")
+		}
+		if control.FirstSync {
+			reasons = append(reasons, "first-sync")
+		}
 		row := uicontrol.FolderStatus{
 			ID: folder.ID, Label: folder.Label, Kind: folder.Kind, Path: folder.Path,
-			Type: folder.Type, State: "paused", Paused: true,
-			PauseReasons: []string{"first-sync"}, Versioning: folder.VersioningType,
-			Issues: []uicontrol.Issue{},
+			Type: folder.Type, State: "paused", Paused: len(reasons) > 0,
+			PauseReasons: reasons, PendingRescan: control.PendingRescan, Versioning: folder.VersioningType,
+			Issues: []uicontrol.Issue{}, PeerCount: remotePeerCount(folder.Devices),
 		}
 		if row.Label == "" {
 			row.Label = "Leaf " + folderKindLabel(folder.Kind)
@@ -101,6 +114,14 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		rows = append(rows, row)
 	}
 	return rows, issues
+}
+
+func remotePeerCount(devices []string) int {
+	count := len(devices) - 1
+	if count < 0 {
+		return 0
+	}
+	return count
 }
 
 func addFolderIssue(row *uicontrol.FolderStatus, all *[]uicontrol.Issue, code, message string) {

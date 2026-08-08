@@ -29,8 +29,13 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *recovery;
     const cJSON *network;
     const cJSON *gateway;
+    const cJSON *transfer;
+    const cJSON *logging;
+    const cJSON *storage;
+    const cJSON *diagnostics;
     const cJSON *cards;
     const cJSON *folders;
+    const cJSON *peers;
     const cJSON *issues;
     const cJSON *capabilities;
     const cJSON *value;
@@ -62,6 +67,32 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     value = cJSON_GetObjectItemCaseSensitive(recovery, "changed");
     if (!cJSON_IsBool(value)) return -1;
     status->recovery_changed = cJSON_IsTrue(value);
+    value = cJSON_GetObjectItemCaseSensitive(recovery, "plan_id");
+    if (value) {
+        const cJSON *remove_paths;
+        const cJSON *retained_paths;
+        if (ls_copy_json(status->reset_plan_id, sizeof(status->reset_plan_id), value) != 0 ||
+            ls_copy_json(status->reset_plan_action, sizeof(status->reset_plan_action),
+                         cJSON_GetObjectItemCaseSensitive(recovery, "plan_action")) != 0) return -1;
+        remove_paths = cJSON_GetObjectItemCaseSensitive(recovery, "remove_paths");
+        retained_paths = cJSON_GetObjectItemCaseSensitive(recovery, "retained_paths");
+        if ((remove_paths && (!cJSON_IsArray(remove_paths) || cJSON_GetArraySize(remove_paths) > LS_UI_MAX_RESET_PATHS)) ||
+            (retained_paths && (!cJSON_IsArray(retained_paths) || cJSON_GetArraySize(retained_paths) > LS_UI_MAX_RESET_PATHS))) return -1;
+        if (remove_paths) {
+            status->reset_remove_count = cJSON_GetArraySize(remove_paths);
+            for (index = 0; index < status->reset_remove_count; index++) {
+                if (ls_copy_json(status->reset_remove_paths[index], sizeof(status->reset_remove_paths[index]),
+                                 cJSON_GetArrayItem(remove_paths, index)) != 0) return -1;
+            }
+        }
+        if (retained_paths) {
+            status->reset_retained_count = cJSON_GetArraySize(retained_paths);
+            for (index = 0; index < status->reset_retained_count; index++) {
+                if (ls_copy_json(status->reset_retained_paths[index], sizeof(status->reset_retained_paths[index]),
+                                 cJSON_GetArrayItem(retained_paths, index)) != 0) return -1;
+            }
+        }
+    }
 
     network = cJSON_GetObjectItemCaseSensitive(result, "network");
     if (network) {
@@ -108,12 +139,90 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         status->gateway_present = true;
     }
 
+    transfer = cJSON_GetObjectItemCaseSensitive(result, "transfer");
+    if (transfer) {
+        if (!cJSON_IsObject(transfer) ||
+            ls_copy_json(status->transfer_state, sizeof(status->transfer_state),
+                         cJSON_GetObjectItemCaseSensitive(transfer, "state")) != 0) return -1;
+        value = cJSON_GetObjectItemCaseSensitive(transfer, "local_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->transfer_local_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(transfer, "global_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->transfer_global_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(transfer, "need_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->transfer_need_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(transfer, "in_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->transfer_in_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(transfer, "out_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->transfer_out_bytes = (long long)value->valuedouble;
+        status->transfer_present = true;
+    }
+
+    logging = cJSON_GetObjectItemCaseSensitive(result, "logging");
+    if (logging) {
+        if (!cJSON_IsObject(logging) ||
+            ls_copy_json(status->log_level, sizeof(status->log_level),
+                         cJSON_GetObjectItemCaseSensitive(logging, "level")) != 0 ||
+            ls_copy_json(status->debug_expires, sizeof(status->debug_expires),
+                         cJSON_GetObjectItemCaseSensitive(logging, "debug_expires")) != 0) return -1;
+        status->logging_present = true;
+    }
+
+    storage = cJSON_GetObjectItemCaseSensitive(result, "storage");
+    if (storage) {
+        const cJSON *inventory;
+        if (!cJSON_IsObject(storage)) return -1;
+        value = cJSON_GetObjectItemCaseSensitive(storage, "snapshot_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->snapshot_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(storage, "version_bytes");
+        if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+        status->version_bytes = (long long)value->valuedouble;
+        value = cJSON_GetObjectItemCaseSensitive(storage, "snapshot_count");
+        if (!cJSON_IsNumber(value) || value->valueint < 0) return -1;
+        status->snapshot_count = value->valueint;
+        value = cJSON_GetObjectItemCaseSensitive(storage, "version_groups");
+        if (!cJSON_IsNumber(value) || value->valueint < 0) return -1;
+        status->version_groups = value->valueint;
+        inventory = cJSON_GetObjectItemCaseSensitive(storage, "inventory");
+        if (!cJSON_IsArray(inventory) || cJSON_GetArraySize(inventory) > LS_UI_MAX_STORAGE_ROWS) return -1;
+        status->storage_row_count = cJSON_GetArraySize(inventory);
+        for (index = 0; index < status->storage_row_count; index++) {
+            const cJSON *item = cJSON_GetArrayItem(inventory, index);
+            ls_ui_storage_row *row = &status->storage_rows[index];
+            if (!cJSON_IsObject(item) ||
+                ls_copy_json(row->card_suffix, sizeof(row->card_suffix), cJSON_GetObjectItemCaseSensitive(item, "card_suffix")) != 0 ||
+                ls_copy_json(row->category, sizeof(row->category), cJSON_GetObjectItemCaseSensitive(item, "category")) != 0 ||
+                ls_copy_json(row->kind, sizeof(row->kind), cJSON_GetObjectItemCaseSensitive(item, "kind")) != 0 ||
+                ls_copy_json(row->name, sizeof(row->name), cJSON_GetObjectItemCaseSensitive(item, "name")) != 0) return -1;
+            value = cJSON_GetObjectItemCaseSensitive(item, "bytes");
+            if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+            row->bytes = (long long)value->valuedouble;
+        }
+        status->storage_present = true;
+    }
+
+    diagnostics = cJSON_GetObjectItemCaseSensitive(result, "diagnostics");
+    if (diagnostics) {
+        if (!cJSON_IsObject(diagnostics) ||
+            ls_copy_json(status->diagnostics_path, sizeof(status->diagnostics_path),
+                         cJSON_GetObjectItemCaseSensitive(diagnostics, "last_export_path")) != 0 ||
+            ls_copy_json(status->diagnostics_exported, sizeof(status->diagnostics_exported),
+                         cJSON_GetObjectItemCaseSensitive(diagnostics, "last_exported")) != 0) return -1;
+    }
+
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
     folders = cJSON_GetObjectItemCaseSensitive(result, "folders");
+    peers = cJSON_GetObjectItemCaseSensitive(result, "peers");
     issues = cJSON_GetObjectItemCaseSensitive(result, "issues");
     capabilities = cJSON_GetObjectItemCaseSensitive(result, "capabilities");
     if (!cJSON_IsArray(cards) || cJSON_GetArraySize(cards) > LS_UI_MAX_CARDS ||
         !cJSON_IsArray(folders) || cJSON_GetArraySize(folders) > LS_UI_MAX_FOLDERS ||
+        (peers && (!cJSON_IsArray(peers) || cJSON_GetArraySize(peers) > LS_UI_MAX_PEERS)) ||
         !cJSON_IsArray(issues) || cJSON_GetArraySize(issues) > LS_UI_MAX_ISSUES ||
         !cJSON_IsArray(capabilities) || cJSON_GetArraySize(capabilities) > LS_UI_MAX_CAPABILITIES) return -1;
 
@@ -142,6 +251,30 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(item, "duplicate_id");
         if (!cJSON_IsBool(value)) return -1;
         card->duplicate_id = cJSON_IsTrue(value);
+    }
+
+    if (peers) {
+        status->peer_count = cJSON_GetArraySize(peers);
+        for (index = 0; index < status->peer_count; index++) {
+            const cJSON *item = cJSON_GetArrayItem(peers, index);
+            ls_ui_peer *peer = &status->peers[index];
+            if (!cJSON_IsObject(item) ||
+                ls_copy_json(peer->id, sizeof(peer->id), cJSON_GetObjectItemCaseSensitive(item, "id")) != 0 ||
+                ls_copy_json(peer->id_suffix, sizeof(peer->id_suffix), cJSON_GetObjectItemCaseSensitive(item, "id_suffix")) != 0 ||
+                ls_copy_json(peer->name, sizeof(peer->name), cJSON_GetObjectItemCaseSensitive(item, "name")) != 0 ||
+                ls_copy_json(peer->state, sizeof(peer->state), cJSON_GetObjectItemCaseSensitive(item, "state")) != 0 ||
+                ls_copy_json(peer->connection, sizeof(peer->connection), cJSON_GetObjectItemCaseSensitive(item, "connection")) != 0 ||
+                ls_copy_json(peer->address, sizeof(peer->address), cJSON_GetObjectItemCaseSensitive(item, "address")) != 0) return -1;
+            value = cJSON_GetObjectItemCaseSensitive(item, "paused");
+            if (!cJSON_IsBool(value)) return -1;
+            peer->paused = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "introducer");
+            if (!cJSON_IsBool(value)) return -1;
+            peer->introducer = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "pending");
+            if (!cJSON_IsBool(value)) return -1;
+            peer->pending = cJSON_IsTrue(value);
+        }
     }
 
     status->folder_count = cJSON_GetArraySize(folders);
@@ -173,6 +306,21 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(item, "peer_count");
         if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
         folder->peer_count = value->valueint;
+        value = cJSON_GetObjectItemCaseSensitive(item, "conflict_count");
+        if (value) {
+            if (!cJSON_IsNumber(value) || value->valueint < 0) return -1;
+            folder->conflict_count = value->valueint;
+        }
+        value = cJSON_GetObjectItemCaseSensitive(item, "conflicts");
+        if (value) {
+            if (!cJSON_IsArray(value) || cJSON_GetArraySize(value) > LS_UI_MAX_CONFLICTS) return -1;
+            folder->conflict_path_count = cJSON_GetArraySize(value);
+            if (folder->conflict_count < folder->conflict_path_count) return -1;
+            for (int conflict = 0; conflict < folder->conflict_path_count; conflict++) {
+                if (ls_copy_json(folder->conflicts[conflict], sizeof(folder->conflicts[conflict]),
+                                 cJSON_GetArrayItem(value, conflict)) != 0) return -1;
+            }
+        }
     }
 
     status->issue_count = cJSON_GetArraySize(issues);
@@ -322,6 +470,77 @@ invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create web interface request");
     return -1;
+}
+
+int ls_ui_folder_action(const char *socket_path, const char *operation,
+                        const char *folder_id, const char *label,
+                        ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    bool rename;
+    if (!operation || !folder_id || !arguments) goto invalid;
+    rename = strcmp(operation, "folder.rename") == 0;
+    if (strcmp(operation, "folder.pause") != 0 &&
+        strcmp(operation, "folder.resume") != 0 &&
+        strcmp(operation, "folder.rescan") != 0 &&
+        strcmp(operation, "folder.inspect") != 0 && !rename) goto invalid;
+    if (!cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        (rename && (!label || !cJSON_AddStringToObject(arguments, "label", label)))) goto invalid;
+    return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder request");
+    return -1;
+}
+
+int ls_ui_device_action(const char *socket_path, const char *operation,
+                        const char *device_id, const char *name,
+                        ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!operation || !device_id || !name || !arguments ||
+        (strcmp(operation, "device.add") != 0 && strcmp(operation, "device.rename") != 0) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddStringToObject(arguments, "name", name)) goto invalid;
+    return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create device request");
+    return -1;
+}
+
+int ls_ui_reset_prepare(const char *socket_path, const char *action,
+                        const char *confirmation, ls_ui_status *status,
+                        char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!action || !confirmation || !arguments ||
+        (strcmp(action, "index-only") != 0 && strcmp(action, "full") != 0 &&
+         strcmp(action, "available-only") != 0) ||
+        !cJSON_AddStringToObject(arguments, "action", action) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true) ||
+        !cJSON_AddStringToObject(arguments, "confirmation", confirmation)) goto invalid;
+    return ls_ui_exchange(socket_path, "reset.prepare", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create reset request");
+    return -1;
+}
+
+int ls_ui_log_level_set(const char *socket_path, const char *level,
+                        ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!level || !arguments || (strcmp(level, "normal") != 0 && strcmp(level, "debug") != 0) ||
+        !cJSON_AddStringToObject(arguments, "level", level) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, "log.level.set", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create logging request");
+    return -1;
+}
+
+int ls_ui_diagnostics_export(const char *socket_path, ls_ui_status *status,
+                             char *error, size_t error_size) {
+    return ls_ui_exchange(socket_path, "diagnostics.export", cJSON_CreateObject(),
+                          status, error, error_size);
 }
 
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {

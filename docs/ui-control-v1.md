@@ -15,9 +15,11 @@ network interface.
 - Each message is UTF-8 JSON prefixed by a four-byte unsigned big-endian byte
   length. The semantic payload ceiling is 64 KiB. Short reads and writes must
   be retried; a partial or oversized frame is rejected.
-- The socket is available only after the pinned upstream is ready. A missing
-  socket means the controller is unavailable; the UI uses CTL-1 for generic
-  service status and recovery actions.
+- The normal socket is available after controller bootstrap. During a durable
+  reset that is waiting for a specific enrolled card, a recovery-only socket
+  remains available with `status.get` as its sole capability. A missing socket
+  means the controller is unavailable; the UI uses CTL-1 only for generic
+  service status and Run/Stop/enable actions.
 
 ## Envelope
 
@@ -58,8 +60,7 @@ requires v2.
 
 ## `status.get`
 
-`args` must be `{}`. The current B1 controller advertises `status.get` and
-`card.enroll`, and returns:
+`args` must be `{}`. The controller returns:
 
 ```text
 controller                         running | recovery-pending | error
@@ -69,8 +70,14 @@ upstream.device_id                 certificate-derived device id
 game.active/launch_id/source_id    reconciled LIFE-1 state
 recovery.state/changed             ready | pending | error; whether startup recovery changed config
 network.profile/allowed_networks   lan-only | sync-anywhere; current route-derived CIDRs
+gateway                            foreground HTTPS/pairing/trust state, when available
+transfer                           aggregate state, sizes, need, and session byte counters
+logging                            normal | debug and the fixed debug expiry
+storage                            bounded snapshot/version inventory and byte totals
+diagnostics                        last fixed-path redacted export, if any
 cards[]                            enrolled/configured physical-card rows
 folders[]                          managed-folder rows
+peers[]                            configured and pending peers with connection kind
 issues[]                           display-safe controller/card/folder issues
 capabilities[]                     supported operation names
 ```
@@ -79,10 +86,12 @@ Card rows freeze physical identity, current slot/root, state (`absent`,
 `unenrolled`, `enrolled`, `invalid`, or `duplicate`), presence, writability,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
 identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
-versioning, and scoped issues. Counts and byte sizes are non-negative; an empty
-timestamp is unknown. B1 normally returns no folder rows because B3 owns
-onboarding; if a strict Leaf binding already exists, B1 forces it paused before
-spawn and returns its reconciled safety state and issues.
+versioning, an optional bounded conflict list, and scoped issues. Peer rows
+distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
+explicit and are never accepted by a status read. Counts and byte sizes are
+non-negative; an empty timestamp is unknown. B3 still owns onboarding and
+first-sync release, so a strict pre-existing Leaf binding remains paused for
+`first-sync` until that phase's durable flow completes.
 
 ## `card.enroll`
 
@@ -104,9 +113,7 @@ metadata only: every write still requires the currently mounted card's own
 matching `card-id`. A replacement card at the remembered mountpoint therefore
 appears as a separate unenrolled row, and duplicate live IDs fail closed.
 
-Generic Run, Stop, and Start-with-Leaf operations remain CTL-1. Folder, peer,
-and reset operations will be added only with the controller model that validates
-and executes them.
+Generic Run, Stop, and Start-with-Leaf operations remain CTL-1.
 
 ## `network.profile.set`
 
@@ -155,6 +162,71 @@ The destructive or longer-lived actions require an explicit confirmation:
 browser. `gateway.revoke-all` removes all browser trust and closes the listener.
 Route/address changes, lease expiry, controller shutdown, or network-profile
 changes also close it.
+
+## Folder operations
+
+All folder ids must name an existing strict Leaf binding. The UI never sends a
+path, and the controller never exposes a free-form path mutation.
+
+```json
+{"v":1,"id":"folder-inspect","op":"folder.inspect","args":{"folder_id":"leaf-saves-0011223344556677"}}
+{"v":1,"id":"folder-pause","op":"folder.pause","args":{"folder_id":"leaf-saves-0011223344556677"}}
+{"v":1,"id":"folder-resume","op":"folder.resume","args":{"folder_id":"leaf-saves-0011223344556677"}}
+{"v":1,"id":"folder-rescan","op":"folder.rescan","args":{"folder_id":"leaf-saves-0011223344556677"}}
+{"v":1,"id":"folder-rename","op":"folder.rename","args":{"folder_id":"leaf-saves-0011223344556677","label":"Leaf Saves"}}
+```
+
+`folder.inspect` performs a bounded, symlink-rejecting scan of the validated
+folder for Syncthing conflict copies and returns at most 64 display paths plus
+the total count. The device UI combines this with the controller's same-card
+snapshot/version inventory. Pause state is durable before the upstream pause
+request. A rescan requested while paused is durable and queued. Resume refuses
+while any non-manual reason remains, including B3's `first-sync` reason.
+
+## Device operations
+
+```json
+{"v":1,"id":"device-add","op":"device.add","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}
+{"v":1,"id":"device-rename","op":"device.rename","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}
+```
+
+The controller accepts a canonical device id or a `syncthing://` device URI.
+New peers always use dynamic addresses, never become introducers, never
+auto-accept folders, and inherit the current route-derived LAN boundary.
+Pending devices are shown by status but require this explicit add operation.
+
+## Logging and diagnostics
+
+```json
+{"v":1,"id":"debug","op":"log.level.set","args":{"level":"debug","confirmed":true}}
+{"v":1,"id":"normal","op":"log.level.set","args":{"level":"normal","confirmed":true}}
+{"v":1,"id":"diagnostics","op":"diagnostics.export","args":{}}
+```
+
+Debug logging expires after 15 minutes even across a controller restart.
+Diagnostics always use the controller-selected
+`leaf-syncthing-diagnostics.json` under `LOGS_PATH`; the caller cannot select a
+path. The report contains bounded states, counts, byte sizes, versions, card-id
+suffixes, and safe issue codes, but no API key, gateway secret, peer/device id,
+folder path/name, game id, cookie, token, PIN, or private key.
+
+## Reset preparation
+
+```json
+{"v":1,"id":"index-reset","op":"reset.prepare","args":{"action":"index-only","confirmed":true,"confirmation":"RESET INDEX"}}
+{"v":1,"id":"full-reset","op":"reset.prepare","args":{"action":"full","confirmed":true,"confirmation":"RESET SYNCTHING"}}
+{"v":1,"id":"available-reset","op":"reset.prepare","args":{"action":"available-only","confirmed":true,"confirmation":"RESET AVAILABLE STATE"}}
+```
+
+The response seals and displays the exact validated deletion set but changes no
+durable data. The C UI asks CTL-1 to stop the service and waits for the owned
+process group and lease to be absent before invoking the package's
+`reset-execute` helper with the random plan id. That helper revalidates the live
+card inventory, takes the controller lock, persists and syncs the exact durable
+intent, removes only the declared controller/index/trust/history roots, syncs
+each filesystem, verifies absence, and clears the intent last. Full reset
+requires every enrolled card. Available-only names the absent-card roots it
+retains. Saves, States, and ROMs are never valid reset roots.
 
 The canonical fixtures live in `tests/fixtures/ui-control-v1/`. `make test`
 round-trips their exact JSON and framing in Go and C.

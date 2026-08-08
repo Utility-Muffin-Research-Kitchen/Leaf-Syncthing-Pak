@@ -253,7 +253,7 @@ func testConfig(t *testing.T) Config {
 		t.Fatal(err)
 	}
 	return Config{
-		RuntimeDir: runtimeDir, UserdataPath: userdata,
+		RuntimeDir: runtimeDir, UserdataPath: userdata, LogsPath: filepath.Join(userdata, "logs"),
 		ConfigDir:       filepath.Join(userdata, leaf.AppStateName, "config"),
 		DataDir:         filepath.Join(userdata, leaf.AppStateName, "data"),
 		UpstreamBinary:  filepath.Join(base, "syncthing"),

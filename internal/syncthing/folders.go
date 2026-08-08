@@ -24,6 +24,7 @@ type ConfiguredFolder struct {
 	VersioningType   string
 	VersioningFSPath string
 	VersioningFSType string
+	Devices          []string
 }
 
 // ReadManagedFolders reads only Leaf-owned folder IDs. B1 never creates a
@@ -48,6 +49,9 @@ func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
 				FSPath string `xml:"fsPath"`
 				FSType string `xml:"fsType"`
 			} `xml:"versioning"`
+			Devices []struct {
+				ID string `xml:"id,attr"`
+			} `xml:"device"`
 		} `xml:"folder"`
 	}
 	if err := xml.Unmarshal(contents, &document); err != nil {
@@ -80,6 +84,14 @@ func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
 			Type: folderType, MarkerName: markerName,
 			VersioningType: folder.Versioning.Type, VersioningFSPath: folder.Versioning.FSPath,
 			VersioningFSType: folder.Versioning.FSType,
+		}
+		deviceSeen := make(map[string]bool)
+		for _, device := range folder.Devices {
+			if device.ID == "" || deviceSeen[device.ID] {
+				return nil, fmt.Errorf("read managed folders: invalid or duplicate device in %q", folder.ID)
+			}
+			deviceSeen[device.ID] = true
+			configured.Devices = append(configured.Devices, device.ID)
 		}
 		if folder.Paused != nil {
 			configured.Paused = *folder.Paused

@@ -41,3 +41,18 @@ func TestCertificatePersistsForAddressSetAndRotatesOnChange(t *testing.T) {
 		t.Fatalf("private key mode = %v", info.Mode().Perm())
 	}
 }
+
+func TestLoadCertificateRejectsSymlinkPair(t *testing.T) {
+	directory := t.TempDir()
+	result, err := ensureCertificate(directory, []net.IP{net.ParseIP("192.0.2.10")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedKey := result.KeyPath + ".link"
+	if err := os.Symlink(result.KeyPath, linkedKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCertificate(result.CertPath, linkedKey, []net.IP{net.ParseIP("192.0.2.10")}); err == nil {
+		t.Fatal("symlinked private key was accepted")
+	}
+}

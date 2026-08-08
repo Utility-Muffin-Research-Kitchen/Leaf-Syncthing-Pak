@@ -88,6 +88,12 @@ func generateCertificate(addresses []net.IP) ([]byte, []byte, error) {
 }
 
 func loadCertificate(certPath, keyPath string, addresses []net.IP) (certificateResult, error) {
+	for _, path := range []string{certPath, keyPath} {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return certificateResult{}, errors.New("gateway certificate pair is unsafe")
+		}
+	}
 	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil || len(pair.Certificate) == 0 {
 		return certificateResult{}, errors.New("gateway certificate pair is unavailable")

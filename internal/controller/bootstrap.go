@@ -32,6 +32,7 @@ var (
 type Config struct {
 	RuntimeDir      string
 	UserdataPath    string
+	LogsPath        string
 	ConfigDir       string
 	DataDir         string
 	UpstreamBinary  string
@@ -101,6 +102,7 @@ func LoadConfig() (Config, error) {
 	return Config{
 		RuntimeDir:      filepath.Join(environment.RuntimePath, "services", ServiceDirName),
 		UserdataPath:    environment.UserdataPath,
+		LogsPath:        environment.LogsPath,
 		ConfigDir:       filepath.Join(environment.StateDir(), "config"),
 		DataDir:         filepath.Join(environment.StateDir(), "data"),
 		UpstreamBinary:  filepath.Join(filepath.Dir(executable), "syncthing"),
@@ -134,6 +136,9 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 			_ = lock.Close()
 		}
 	}()
+	if _, err := RecoverReset(runner.Config, ResetOptions{}); err != nil {
+		return nil, fmt.Errorf("recover destructive reset: %w", err)
+	}
 
 	if err := prepareDurableDirectories(runner.Config.UserdataPath); err != nil {
 		return nil, err
@@ -259,7 +264,7 @@ func (session *Session) Close() error {
 }
 
 func (config Config) validate() error {
-	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
+	if config.RuntimeDir == "" || config.UserdataPath == "" || config.LogsPath == "" || config.ConfigDir == "" || config.DataDir == "" ||
 		config.UpstreamBinary == "" || config.UpstreamVersion == "" || config.GUISocket == "" ||
 		config.ControlSocket == "" || config.DaemonSocket == "" || len(config.Sources) == 0 {
 		return errors.New("leaf-syncthing: runtime, userdata, config, data, upstream, and daemon values are required")
