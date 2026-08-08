@@ -1,6 +1,6 @@
 # B1 controller qualification record
 
-**Status:** In progress; controller/upstream, card, migration, folder-conflict, and guardian gates passed
+**Status:** In progress; controller/upstream, card, migration, folder-conflict, guardian, and write-boundary gates passed
 
 **Date:** 2026-08-08
 
@@ -18,9 +18,11 @@
 
 **Transitive guardian commit:** `7425c10f3c5759956eb8bfdf3cbf889cf2cf491e`
 
+**Write-boundary qualification commit:** `a263145a3403d7acf2cf401505b58286aff58d0d`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
-**Contract pin:** `dcdd0eff6961264dac60f4a951e3706d3d1ddc9d`
+**Contract pin:** `e9b00c5e357c32e5d4e055d1d10d5e7b6fff944c`
 
 This is the early production-shaped B1 measurement required before card and
 folder work expands the controller. It is not the final B1 completion record.
@@ -93,6 +95,23 @@ strict Leaf Saves/States binding is paused offline before spawn, then reconciled
 against its physical card, PATH-2 path, supported type, writability, custom
 marker, foreign `.stfolder`, and explicit same-card versioning. Rows and issues
 are visible, but B1 still onboards no folder.
+
+## Fault-injection results
+
+Host fault injection now covers the remaining B1-owned `B-REC-01` boundaries:
+
+- card enrollment discards both partial and fully formed `card-id.tmp` files
+  instead of adopting them; a failure of the card-wide flush after promotion
+  converges by returning the exact promoted id without drawing new randomness;
+- a failure of the first clean-identity filesystem flush leaves no final
+  config, and the next factory-clean attempt generates afresh; a failure of the
+  post-promotion flush leaves a complete marked identity that recovery validates
+  without invoking `syncthing generate` again or changing certificate, key, or
+  marker bytes;
+- the complete `config.xml`/`.tmp`/`.bak` state table covers every offline edit
+  rename boundary, including convergence after recovery-flush failure. A newly
+  injected failure after successful pause-config promotion reparses as ready
+  and the repeated edit is a no-op rather than another transaction.
 
 ## Physical-device results
 
@@ -203,6 +222,5 @@ the measured resident controller increment here is about 6.9 MiB.
 
 ## Remaining B1 work
 
-- complete card-id and clean identity/config write-boundary fault injection;
 - repeat the physical scan/receive/rename/versioning removal matrix through the
   real controller, then run final footprint, secret, and staging audits.
