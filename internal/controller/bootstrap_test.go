@@ -10,6 +10,7 @@ import (
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
+	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
 )
 
 type fakeLifecycle struct{ closed bool }
@@ -104,12 +105,45 @@ func TestBootstrapModeStopExitsBeforeContinuation(t *testing.T) {
 		Connect: func(_ context.Context, _ life1.Config) (Lifecycle, life1.GameState, error) {
 			return lifecycle, life1.GameState{Active: true, LaunchID: "launch", SourceID: "primary"}, nil
 		},
+		Recover: func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
+			t.Fatal("config recovery ran during intentional mode-stop exit")
+			return syncthingconfig.RecoveryResult{}, nil
+		},
 	}
 	if _, err := runner.Bootstrap(context.Background()); !errors.Is(err, ErrLifecycleStop) {
 		t.Fatalf("Bootstrap() error = %v, want %v", err, ErrLifecycleStop)
 	}
 	if !lifecycle.closed {
 		t.Fatal("mode-stop path did not close LIFE-1 connection")
+	}
+}
+
+func TestBootstrapQueriesLifecycleBeforeConfigRecovery(t *testing.T) {
+	config := testConfig(t)
+	connected := false
+	runner := Runner{
+		Config: config,
+		Connect: func(_ context.Context, _ life1.Config) (Lifecycle, life1.GameState, error) {
+			connected = true
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		Recover: func(path string, _ syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
+			if !connected {
+				t.Fatal("config recovery ran before LIFE-1 reconciliation")
+			}
+			if path != config.ConfigDir {
+				t.Fatalf("recovery path = %s, want %s", path, config.ConfigDir)
+			}
+			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
+		},
+	}
+	session, err := runner.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if session.Recovery.State != syncthingconfig.RecoveryClean {
+		t.Fatalf("recovery = %+v", session.Recovery)
 	}
 }
 
@@ -144,6 +178,7 @@ func testConfig(t *testing.T) Config {
 	}
 	return Config{
 		RuntimeDir: runtimeDir, UserdataPath: userdata,
+		ConfigDir:    filepath.Join(userdata, leaf.AppStateName, "config"),
 		DaemonSocket: filepath.Join(base, "jawakad.sock"),
 		Mode:         life1.ModeNotify, AckMS: life1.DefaultAckMS,
 	}

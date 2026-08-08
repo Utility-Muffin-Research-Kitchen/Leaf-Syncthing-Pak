@@ -11,6 +11,7 @@ import (
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
+	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,6 +32,7 @@ var (
 type Config struct {
 	RuntimeDir   string
 	UserdataPath string
+	ConfigDir    string
 	DaemonSocket string
 	Mode         life1.Mode
 	AckMS        int
@@ -43,15 +45,18 @@ type Lifecycle interface {
 }
 
 type ConnectFunc func(context.Context, life1.Config) (Lifecycle, life1.GameState, error)
+type RecoverConfigFunc func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error)
 
 type Runner struct {
 	Config  Config
 	Connect ConnectFunc
+	Recover RecoverConfigFunc
 	Logf    func(string, ...any)
 }
 
 type Session struct {
 	State     life1.GameState
+	Recovery  syncthingconfig.RecoveryResult
 	Lifecycle Lifecycle
 	lock      *os.File
 }
@@ -68,6 +73,7 @@ func LoadConfig() (Config, error) {
 	return Config{
 		RuntimeDir:   filepath.Join(environment.RuntimePath, "services", ServiceDirName),
 		UserdataPath: environment.UserdataPath,
+		ConfigDir:    filepath.Join(environment.StateDir(), "config"),
 		DaemonSocket: socket,
 		Mode:         life1.ModeNotify,
 		AckMS:        life1.DefaultAckMS,
@@ -76,7 +82,7 @@ func LoadConfig() (Config, error) {
 	}, nil
 }
 
-// Bootstrap implements the first three normative SYNC-1 startup steps. It
+// Bootstrap implements the first four normative SYNC-1 startup steps. It
 // returns with the singleton lock and LIFE-1 connection held so no caller can
 // accidentally spawn upstream outside their protection.
 func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
@@ -143,8 +149,18 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		return nil, ErrLifecycleStop
 	}
 
+	recoverConfig := runner.Recover
+	if recoverConfig == nil {
+		recoverConfig = syncthingconfig.RecoverConfig
+	}
+	recovery, err := recoverConfig(runner.Config.ConfigDir, nil)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("recover upstream config: %w", err)
+	}
+
 	closeLock = false
-	return &Session{State: state, Lifecycle: lifecycle, lock: lock}, nil
+	return &Session{State: state, Recovery: recovery, Lifecycle: lifecycle, lock: lock}, nil
 }
 
 func (session *Session) Close() error {
@@ -164,8 +180,8 @@ func (session *Session) Close() error {
 }
 
 func (config Config) validate() error {
-	if config.RuntimeDir == "" || config.UserdataPath == "" || config.DaemonSocket == "" {
-		return errors.New("leaf-syncthing: runtime, userdata, and daemon paths are required")
+	if config.RuntimeDir == "" || config.UserdataPath == "" || config.ConfigDir == "" || config.DaemonSocket == "" {
+		return errors.New("leaf-syncthing: runtime, userdata, config, and daemon paths are required")
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {
 		return fmt.Errorf("leaf-syncthing: unsupported game mode %q", config.Mode)
