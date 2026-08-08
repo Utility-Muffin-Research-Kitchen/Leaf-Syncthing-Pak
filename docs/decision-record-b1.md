@@ -26,7 +26,7 @@ removal remains
 
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
-**Contract pin:** `e9b00c5e357c32e5d4e055d1d10d5e7b6fff944c`
+**Contract pin:** `29cf72babbede581d1efa1f669fe286c11544ce1`
 
 This is the early production-shaped B1 measurement required before card and
 folder work expands the controller. It is not the final B1 completion record.
