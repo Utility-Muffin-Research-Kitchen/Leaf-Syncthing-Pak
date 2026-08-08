@@ -75,9 +75,9 @@ type parsedConfig struct {
 	} `xml:"device"`
 }
 
-// EnsureIdentity completes SYNC-1's factory-clean generation transaction or
-// validates a previously promoted controller-generated identity. It never
-// generates into, or replaces files inside, an existing config directory.
+// EnsureIdentity completes SYNC-1's factory-clean generation transaction, or
+// migrates an older config through disposable copies before validating it. It
+// never generates into, or replaces identity files inside, a live config tree.
 func EnsureIdentity(ctx context.Context, options IdentityOptions, recovery RecoveryResult) (Identity, error) {
 	if err := options.validate(); err != nil {
 		return Identity{}, err

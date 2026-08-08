@@ -12,6 +12,8 @@
 
 **Card safety commit:** `78ba51192cd254c67b0011a0387236783f7e4336`
 
+**Existing-identity migration commit:** `a3db504fefcc283ba0b727f5b308c98f0ca76f60`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
 **Contract pin:** `5ab17d82c122b481f15c835e6ff9a21829d45aa9`
@@ -28,9 +30,10 @@ The cgo-disabled `leaf-syncthing` command now implements the first six ordered
 2. validate/create only the app-owned durable roots;
 3. establish a close-on-exec LIFE-1 subscription and reconcile `game.state`;
 4. recover `config.xml`/`.tmp`/`.bak` through the normative state table;
-5. generate and validate identity in same-filesystem temporary config/data
-   directories, flush, promote, and revalidate the certificate-derived device
-   id and identity marker;
+5. generate and validate a factory identity in same-filesystem temporary
+   config/data directories, or migrate an older existing config only through
+   disposable copies; validate, flush, promote only `config.xml`, and recheck
+   the certificate-derived device id and identity marker;
 6. apply/reparse managed pause fields through the recoverable three-file
    transaction. B1 currently has no enrolled folders, so the live pause set is
    empty.
@@ -103,7 +106,14 @@ verified that no fixture process or mount remained.
 - CTL-1 Stop reached `disabled`/`stopped` and left no controller, monitor, or
   main process from the fixture.
 - A second supervised Run reused byte-identical certificate, private-key, and
-  generation-marker hashes. The second Stop again proved absence.
+  generation-marker hashes. Before that Run the fixture changed the isolated
+  config and marker from schema 52 / upstream v2.1.2 to schema 51 / v2.1.1.
+  The pinned `generate --config=... --data=...` subcommand upgraded only the
+  same-filesystem `config.migrate.tmp` copy; the controller verified copied
+  certificate/key hashes and device identity, promoted only the validated XML
+  through `config.xml.tmp`/`.bak`, restored the original marker hash, removed
+  both migration staging directories, and only then spawned upstream. The
+  second Stop again proved absence.
 - A separate opt-in device test generated/promoted/revalidated the same
   transaction on the real FAT-backed `$USERDATA_PATH`, using real Linux
   `syncfs`; it then removed its exact test root and temporary binaries.

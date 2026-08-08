@@ -35,7 +35,8 @@ The current package is intentionally labeled `0.0.0-b0a`: it contains the
 verified upstream binary and the read-only HTTPS gateway qualification spike,
 plus the Go LIFE-1 transport, persistent subscribe/state-reconciliation client,
 the first six ordered controller startup steps (including recoverable
-three-file config recovery and same-filesystem identity generation/promotion),
+three-file config recovery, same-filesystem identity generation/promotion, and
+disposable-copy migration that never replaces an existing certificate/key),
 the token-preserving private-socket/LAN-only initial profile, and canonical
 cross-language fixture tests. The source tree also contains the unfinished B1
 controller: supervised upstream lifecycle, strict PATH-2 card enrollment and
