@@ -18,7 +18,7 @@
     "default_enabled": false,
     "stop_grace_ms": 10000,
     "lifecycle": {
-      "game": "notify",
+      "game": "stop",
       "stop_on_storage_change": true,
       "stop_on_suspend": true
     }

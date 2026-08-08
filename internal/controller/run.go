@@ -123,24 +123,26 @@ func (runner Runner) Run(ctx context.Context) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	lifecycleEvents := make(chan lifecycleResult, 1)
-	go func() {
-		for {
-			event, err := session.Lifecycle.Next(runContext)
-			select {
-			case lifecycleEvents <- lifecycleResult{event: event, err: err}:
-			case <-runContext.Done():
-				return
+	startLifecycleReader := func(lifecycle Lifecycle) {
+		go func() {
+			for {
+				event, err := lifecycle.Next(runContext)
+				select {
+				case lifecycleEvents <- lifecycleResult{event: event, err: err}:
+				case <-runContext.Done():
+					return
+				}
+				if err != nil {
+					return
+				}
 			}
-			if err != nil {
-				return
-			}
-		}
-	}()
+		}()
+	}
+	startLifecycleReader(session.Lifecycle)
 	var upstreamDone <-chan error
 	if upstream != nil {
 		upstreamDone = upstream.Done()
 	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -163,7 +165,27 @@ func (runner Runner) Run(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return shutdownUpstream(upstream)
 				}
-				return fmt.Errorf("LIFE-1 subscription failed: %w", result.err)
+				_ = session.Lifecycle.Close()
+				replacement, state, err := runner.establishLifecycle(ctx)
+				if err != nil {
+					if ctx.Err() != nil {
+						return shutdownUpstream(upstream)
+					}
+					if shutdownErr := shutdownUpstream(upstream); shutdownErr != nil {
+						return fmt.Errorf("reconnect LIFE-1 (%v); stop upstream: %w", err, shutdownErr)
+					}
+					return err
+				}
+				session.Lifecycle = replacement
+				if runner.Config.Mode == life1.ModeStop && state.Active {
+					return shutdownUpstream(upstream)
+				}
+				gameState = state
+				updated := status.Load().(uicontrol.Status)
+				updated.Game = uicontrol.GameStatus{Active: state.Active, LaunchID: state.LaunchID, SourceID: state.SourceID}
+				status.Store(updated)
+				startLifecycleReader(replacement)
+				continue
 			}
 			if err := handleLifecycleEvent(session.Lifecycle, result.event); err != nil {
 				return err
@@ -270,7 +292,7 @@ func reconcileGameState(current life1.GameState, event life1.Event) life1.GameSt
 			Active: true, LaunchID: event.LaunchID, SourceID: event.SourceID,
 			SavesPath: event.SavesPath, StatesPath: event.StatesPath,
 		}
-	case "game.cancel", "game.finish":
+	case "game.finish":
 		if current.LaunchID == event.LaunchID {
 			return life1.GameState{}
 		}
@@ -293,13 +315,14 @@ func shutdownUpstream(upstream UpstreamProcess) error {
 func handleLifecycleEvent(lifecycle Lifecycle, event life1.Event) error {
 	switch event.Name {
 	case "game.start":
-		// B1 creates no folders and forces recognized pre-B3 bindings paused
-		// before spawn, so no managed writer can delay this acknowledgment yet.
-		if err := lifecycle.SendReady(event.LaunchID); err != nil {
-			return fmt.Errorf("answer game.start: %w", err)
+		// Cooperative pause did not qualify in B0b. An unexpected notify
+		// subscription must force Jawaka's verified-stop fallback, never ready.
+		if err := lifecycle.SendError(event.LaunchID, "pause-unavailable"); err != nil {
+			return fmt.Errorf("reject game.start: %w", err)
 		}
 	case "game.cancel", "game.finish":
-		// No B1 folder pause reason exists to release.
+		// Mode stop receives no game events. Retain the protocol no-op so a
+		// runtime policy override cannot turn an ignorable finish into failure.
 	default:
 		return fmt.Errorf("unsupported LIFE-1 event %q", event.Name)
 	}

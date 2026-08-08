@@ -17,6 +17,7 @@ type fakeLifecycle struct {
 	closed bool
 	next   func(context.Context) (life1.Event, error)
 	ready  func(string) error
+	reject func(string, string) error
 }
 
 func (lifecycle *fakeLifecycle) Close() error {
@@ -39,7 +40,12 @@ func (lifecycle *fakeLifecycle) SendReady(launchID string) error {
 	return nil
 }
 
-func (*fakeLifecycle) SendError(string, string) error { return nil }
+func (lifecycle *fakeLifecycle) SendError(launchID, reason string) error {
+	if lifecycle.reject != nil {
+		return lifecycle.reject(launchID, reason)
+	}
+	return nil
+}
 
 func TestBootstrapOrdersLockDirectoriesAndLifecycle(t *testing.T) {
 	config := testConfig(t)

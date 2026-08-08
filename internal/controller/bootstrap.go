@@ -109,7 +109,7 @@ func LoadConfig() (Config, error) {
 		ControlSocket:   filepath.Join(environment.RuntimePath, "services", ServiceDirName, "control.sock"),
 		DaemonSocket:    socket,
 		Sources:         environment.Sources,
-		Mode:            life1.ModeNotify,
+		Mode:            life1.ModeStop,
 		AckMS:           life1.DefaultAckMS,
 		WaitMS:          life1.DefaultWaitMS,
 		RetryDelay:      DefaultRetry,
@@ -139,43 +139,9 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		return nil, err
 	}
 
-	connect := runner.Connect
-	if connect == nil {
-		connect = func(ctx context.Context, config life1.Config) (Lifecycle, life1.GameState, error) {
-			return life1.Connect(ctx, config)
-		}
-	}
-	retryDelay := runner.Config.RetryDelay
-	if retryDelay == 0 {
-		retryDelay = DefaultRetry
-	}
-
-	var lifecycle Lifecycle
-	var state life1.GameState
-	for {
-		lifecycle, state, err = connect(ctx, life1.Config{
-			SocketPath: runner.Config.DaemonSocket,
-			ServiceID:  ServiceID,
-			Mode:       runner.Config.Mode,
-			AckMS:      runner.Config.AckMS,
-			WaitMS:     runner.Config.WaitMS,
-		})
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, life1.ErrUnavailable) {
-			return nil, fmt.Errorf("establish LIFE-1 subscription: %w", err)
-		}
-		if runner.Logf != nil {
-			runner.Logf("Jawaka unavailable; upstream remains stopped: %v", err)
-		}
-		timer := time.NewTimer(retryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
+	lifecycle, state, err := runner.establishLifecycle(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	if runner.Config.Mode == life1.ModeStop && state.Active {
@@ -236,6 +202,44 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		State: state, Recovery: recovery, Identity: identity, PauseEdit: pauseEdit, Folders: folders,
 		Lifecycle: lifecycle, lock: lock,
 	}, nil
+}
+
+func (runner Runner) establishLifecycle(ctx context.Context) (Lifecycle, life1.GameState, error) {
+	connect := runner.Connect
+	if connect == nil {
+		connect = func(ctx context.Context, config life1.Config) (Lifecycle, life1.GameState, error) {
+			return life1.Connect(ctx, config)
+		}
+	}
+	retryDelay := runner.Config.RetryDelay
+	if retryDelay == 0 {
+		retryDelay = DefaultRetry
+	}
+	for {
+		lifecycle, state, err := connect(ctx, life1.Config{
+			SocketPath: runner.Config.DaemonSocket,
+			ServiceID:  ServiceID,
+			Mode:       runner.Config.Mode,
+			AckMS:      runner.Config.AckMS,
+			WaitMS:     runner.Config.WaitMS,
+		})
+		if err == nil {
+			return lifecycle, state, nil
+		}
+		if !errors.Is(err, life1.ErrUnavailable) {
+			return nil, life1.GameState{}, fmt.Errorf("establish LIFE-1 subscription: %w", err)
+		}
+		if runner.Logf != nil {
+			runner.Logf("Jawaka unavailable; upstream remains stopped: %v", err)
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, life1.GameState{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (session *Session) Close() error {
