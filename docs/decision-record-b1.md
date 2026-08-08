@@ -1,6 +1,6 @@
 # B1 controller qualification record
 
-**Status:** In progress; early controller/upstream gate passed
+**Status:** In progress; controller/upstream and card-safety gates passed
 
 **Date:** 2026-08-08
 
@@ -9,6 +9,8 @@
 **Controller commit:** `79f9f228699e8c78da358fdec211679a179ff0c6`
 
 **UI control commit:** `536eb457a3dfe5ccbd396dd87f839576d53a2594`
+
+**Card safety commit:** `78ba51192cd254c67b0011a0387236783f7e4336`
 
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
@@ -54,9 +56,26 @@ socket at `control.sock`, independently of the upstream admin socket. The
 frozen v1 envelope, status shape, compatibility rules, and error vocabulary are
 documented in `docs/ui-control-v1.md`; canonical fixtures under
 `tests/fixtures/ui-control-v1/` round-trip from both Go and standalone C. B1
-advertises only the implemented read-only `status.get` operation. Future
-mutation operations remain absent until their controller-owned card/network
-models exist.
+advertises read-only `status.get` plus explicit `card.enroll`; other mutation
+operations remain absent until their controller-owned folder/network models
+exist.
+
+The controller now consumes PATH-2 rather than deriving hidden userdata paths.
+It requires the complete v2 singular/plural set, byte-matched Primary aliases,
+aligned counts/order, unique roots, and every content/userdata entry confined
+to its declared card. Card inspection uses exact decoded Linux mountinfo for
+both slots. Explicit `card.enroll` writes a versioned random 128-bit identity
+through `card-id.tmp`, flushes the file, promotes it, and requires real card
+`syncfs`; an existing identity is never replaced automatically.
+
+A recoverable primary registry retains physical identity, last logical slot,
+and last measured retained bytes for configured-but-absent display. Live writes
+never trust that remembered slot. Replacement cards remain separate, and two
+mounted cards with the same ID are both marked duplicate. The status response
+now exposes per-card presence, writable/enrollment/duplicate state, physical-ID
+suffix, slot, retained bytes, and bounded display-safe issues. Folder binding
+names and mandatory non-default markers are derived and validated, but no
+folder is onboarded in B1 yet.
 
 ## Physical-device results
 
@@ -75,8 +94,12 @@ verified that no fixture process or mount remained.
   encrypted sync listeners on port 22000 are expected.
 - The separate mode-`0600` `control.sock` returned the frozen v1
   `status.get` response with running controller/upstream state, the pinned
-  version and device id, empty card/folder rows, and only the implemented
-  `status.get` capability. It disappeared after each CTL-1 Stop.
+  version and device id, an unenrolled Primary card row, empty folder rows, and
+  the implemented `status.get`/`card.enroll` capabilities. It disappeared after
+  each CTL-1 Stop.
+- The controller enrolled the isolated bind-mounted card through
+  `card.enroll`, returned an `enrolled` Primary row, and reused the same
+  `card-id` bytes on the second supervised Run.
 - CTL-1 Stop reached `disabled`/`stopped` and left no controller, monitor, or
   main process from the fixture.
 - A second supervised Run reused byte-identical certificate, private-key, and
@@ -84,6 +107,20 @@ verified that no fixture process or mount remained.
 - A separate opt-in device test generated/promoted/revalidated the same
   transaction on the real FAT-backed `$USERDATA_PATH`, using real Linux
   `syncfs`; it then removed its exact test root and temporary binaries.
+
+`scripts/adb-mlp1-b1-card-safety.sh` then exercised the two actual mounted vfat
+cards (`/dev/mmcblk3p1` and `/dev/mmcblk1p1`) using only validated temporary
+userdata roots named `.userdata/mlp1-b1-card-smoke`:
+
+- both cards received distinct identities through the production enrollment
+  transaction and real Linux `syncfs`;
+- reversing their logical source order changed only the displayed slot while
+  each identity stayed with its physical card;
+- removing the test identity from one card and enrolling it again produced a
+  replacement row while the registry retained the old card as absent;
+- copying one test identity onto both cards marked both live rows duplicate;
+- cleanup removed both exact temporary roots and the remote test binary, and
+  the live `loong_pangu` process remained running.
 
 ## Ten-minute idle gate
 
@@ -114,8 +151,8 @@ the measured resident controller increment here is about 6.9 MiB.
 
 ## Remaining B1 work
 
-- implement card enrollment, mountinfo/card-id verification, managed folder
-  reconciliation, retained-data inventory, and foreign-instance UI reporting;
+- implement managed folder reconciliation and foreign-marker/foreign-instance
+  UI reporting;
 - implement the existing-identity disposable-copy migration path;
 - exercise controller death, direct-upstream death, and Jawaka death/restart
   guardian cases with an active upstream workload;
