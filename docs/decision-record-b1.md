@@ -8,6 +8,8 @@
 
 **Controller commit:** `79f9f228699e8c78da358fdec211679a179ff0c6`
 
+**UI control commit:** `536eb457a3dfe5ccbd396dd87f839576d53a2594`
+
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
 **Contract pin:** `5ab17d82c122b481f15c835e6ff9a21829d45aa9`
@@ -47,6 +49,15 @@ and proves the remaining group empty; guardian cleanup signals every other
 group member, escalates survivors, and proves non-zombie absence before the
 controller returns.
 
+After upstream readiness, the controller now serves the package-private UI
+socket at `control.sock`, independently of the upstream admin socket. The
+frozen v1 envelope, status shape, compatibility rules, and error vocabulary are
+documented in `docs/ui-control-v1.md`; canonical fixtures under
+`tests/fixtures/ui-control-v1/` round-trip from both Go and standalone C. B1
+advertises only the implemented read-only `status.get` operation. Future
+mutation operations remain absent until their controller-owned card/network
+models exist.
+
 ## Physical-device results
 
 `scripts/adb-mlp1-b1-controller-smoke.sh` ran an isolated executable mock card
@@ -62,6 +73,10 @@ verified that no fixture process or mount remained.
   `$UMRK_RUNTIME_PATH/services/org.umrk.syncthing/syncthing-gui.sock`, mode
   `0600`; no TCP listener existed on conventional GUI port 8384. The direct
   encrypted sync listeners on port 22000 are expected.
+- The separate mode-`0600` `control.sock` returned the frozen v1
+  `status.get` response with running controller/upstream state, the pinned
+  version and device id, empty card/folder rows, and only the implemented
+  `status.get` capability. It disappeared after each CTL-1 Stop.
 - CTL-1 Stop reached `disabled`/`stopped` and left no controller, monitor, or
   main process from the fixture.
 - A second supervised Run reused byte-identical certificate, private-key, and
@@ -99,7 +114,6 @@ the measured resident controller increment here is about 6.9 MiB.
 
 ## Remaining B1 work
 
-- freeze and implement the package-private C/Go UI control protocol/socket;
 - implement card enrollment, mountinfo/card-id verification, managed folder
   reconciliation, retained-data inventory, and foreign-instance UI reporting;
 - implement the existing-identity disposable-copy migration path;
