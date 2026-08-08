@@ -88,6 +88,23 @@ func TestHandleRejectsProtocolDrift(t *testing.T) {
 	}
 }
 
+func TestStatusKeepsRequiredEmptyCollectionsAsArrays(t *testing.T) {
+	status := fixtureStatus()
+	status.Cards = make([]CardStatus, 0)
+	status.Folders = make([]FolderStatus, 0)
+	status.Issues = make([]Issue, 0)
+	response := Handle([]byte(`{"v":1,"id":"empty","op":"status.get","args":{}}`), status)
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"cards":[]`, `"folders":[]`, `"issues":[]`} {
+		if !bytes.Contains(payload, []byte(required)) {
+			t.Fatalf("required empty collection %s missing from %s", required, payload)
+		}
+	}
+}
+
 func TestServerOneShotExchangeAndCleanup(t *testing.T) {
 	directory := shortTempDir(t)
 	socket := filepath.Join(directory, SocketName)

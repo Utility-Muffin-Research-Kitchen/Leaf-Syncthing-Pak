@@ -585,12 +585,12 @@ func (status *Status) normalize() {
 	if status.Cards == nil {
 		status.Cards = []CardStatus{}
 	} else {
-		status.Cards = append([]CardStatus(nil), status.Cards...)
+		status.Cards = append([]CardStatus{}, status.Cards...)
 	}
 	if status.Folders == nil {
 		status.Folders = []FolderStatus{}
 	} else {
-		status.Folders = append([]FolderStatus(nil), status.Folders...)
+		status.Folders = append([]FolderStatus{}, status.Folders...)
 	}
 	if status.Peers != nil {
 		status.Peers = append([]PeerStatus(nil), status.Peers...)
