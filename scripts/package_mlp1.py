@@ -50,6 +50,7 @@ def main() -> None:
     shutil.copy2(controller, PACKAGE_DIR / "bin" / "leaf-syncthing")
     shutil.copy2(ROOT / "launch.sh", PACKAGE_DIR / "launch.sh")
     shutil.copy2(ROOT / "pak.json", PACKAGE_DIR / "pak.json")
+    shutil.copy2(ROOT / "LICENSE", PACKAGE_DIR / "licenses" / "Leaf-Syncthing-Pak-MIT.txt")
     shutil.copy2(LOCK_PATH, PACKAGE_DIR / "licenses" / LOCK_PATH.name)
     for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing"):
         executable.chmod(0o755)

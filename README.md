@@ -67,3 +67,6 @@ artifact can be packaged.
 Local tests expect `../umrk-workspace`; CI checks out the explicitly pinned
 contract revision beside this repository. `make test` runs all Go packages and
 the standalone C UI-protocol fixture check.
+
+The UMRK controller and packaging code are MIT licensed. The bundled upstream
+Syncthing binary remains under MPL-2.0; both notices ship in the pak.
