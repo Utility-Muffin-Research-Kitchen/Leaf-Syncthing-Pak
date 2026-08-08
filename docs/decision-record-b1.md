@@ -1,6 +1,6 @@
 # B1 controller qualification record
 
-**Status:** In progress; controller/upstream and card-safety gates passed
+**Status:** In progress; controller/upstream, card, migration, and folder-conflict gates passed
 
 **Date:** 2026-08-08
 
@@ -13,6 +13,8 @@
 **Card safety commit:** `78ba51192cd254c67b0011a0387236783f7e4336`
 
 **Existing-identity migration commit:** `a3db504fefcc283ba0b727f5b308c98f0ca76f60`
+
+**Managed-folder/conflict commit:** `6e6318f0fd86d079e36c66c6bd19bb4da6a5533f`
 
 **Jawaka commit:** `f50d5ce745fdbcc7a65551d3783558d2ff1d0a7c`
 
@@ -34,9 +36,9 @@ The cgo-disabled `leaf-syncthing` command now implements the first six ordered
    config/data directories, or migrate an older existing config only through
    disposable copies; validate, flush, promote only `config.xml`, and recheck
    the certificate-derived device id and identity marker;
-6. apply/reparse managed pause fields through the recoverable three-file
-   transaction. B1 currently has no enrolled folders, so the live pause set is
-   empty.
+6. recognize strict Leaf-managed folder IDs and force every one paused through
+   the recoverable three-file transaction before spawn. B1 creates no folder;
+   B3 owns onboarding and first-sync completion.
 
 Factory generation applies the Leaf-owned profile while the config is still an
 uncommitted staging tree. Its token rewrite preserves unknown XML while setting
@@ -45,14 +47,15 @@ discovery, relays, NAT traversal, usage/crash reporting, browser launch, and
 auto-upgrade, and retaining local discovery/direct sync. Runtime also passes
 `--no-upgrade`, `--no-restart`, and the current Unix GUI address.
 
-The upstream runner verifies that no foreign Syncthing process or conventional
-GUI listener exists, starts the monitor/main tree in the controller's reserved
-process group with child `PDEATHSIG`, waits for an authenticated REST response
-over the Unix socket, and checks the actual socket type/mode. It never restarts
-upstream inside the same generation. Normal stop requests graceful API shutdown
-and proves the remaining group empty; guardian cleanup signals every other
-group member, escalates survivors, and proves non-zombie absence before the
-controller returns.
+The upstream runner checks for a foreign Syncthing process or conventional GUI
+listener before spawn. On conflict the controller remains available on its
+private socket with a specific conflict issue and starts no upstream. Otherwise
+it starts the monitor/main tree in the reserved process group with child
+`PDEATHSIG`, waits for authenticated REST over the Unix socket, and checks the
+actual socket type/mode. It never restarts upstream inside the same generation.
+Normal stop requests graceful API shutdown and proves the remaining group
+empty; guardian cleanup signals every other group member, escalates survivors,
+and proves non-zombie absence before the controller returns.
 
 After upstream readiness, the controller now serves the package-private UI
 socket at `control.sock`, independently of the upstream admin socket. The
@@ -77,8 +80,11 @@ never trust that remembered slot. Replacement cards remain separate, and two
 mounted cards with the same ID are both marked duplicate. The status response
 now exposes per-card presence, writable/enrollment/duplicate state, physical-ID
 suffix, slot, retained bytes, and bounded display-safe issues. Folder binding
-names and mandatory non-default markers are derived and validated, but no
-folder is onboarded in B1 yet.
+names and mandatory non-default markers are derived and validated. Any existing
+strict Leaf Saves/States binding is paused offline before spawn, then reconciled
+against its physical card, PATH-2 path, supported type, writability, custom
+marker, foreign `.stfolder`, and explicit same-card versioning. Rows and issues
+are visible, but B1 still onboards no folder.
 
 ## Physical-device results
 
@@ -103,6 +109,11 @@ verified that no fixture process or mount remained.
 - The controller enrolled the isolated bind-mounted card through
   `card.enroll`, returned an `enrolled` Primary row, and reused the same
   `card-id` bytes on the second supervised Run.
+- With a separate real pinned Syncthing monitor/main pair already live, Leaf
+  started only its controller, reported `upstream.state=conflict` plus
+  `foreign-syncthing` on `control.sock`, and did not add an upstream process.
+  Stopping Leaf left the foreign pair untouched; fixture cleanup then removed
+  it before normal startup.
 - CTL-1 Stop reached `disabled`/`stopped` and left no controller, monitor, or
   main process from the fixture.
 - A second supervised Run reused byte-identical certificate, private-key, and
@@ -114,6 +125,12 @@ verified that no fixture process or mount remained.
   through `config.xml.tmp`/`.bak`, restored the original marker hash, removed
   both migration staging directories, and only then spawned upstream. The
   second Stop again proved absence.
+- The same restart carried an injected, initially unpaused, derivation-correct
+  Leaf Saves send-only binding. Startup forced it paused through the offline
+  transaction before spawn and reported only the `first-sync` reason. A third
+  run after adding a default `.stfolder` kept it paused and reported the
+  folder-scoped `foreign-folder-manager` error. No folder or marker was created
+  by the controller.
 - A separate opt-in device test generated/promoted/revalidated the same
   transaction on the real FAT-backed `$USERDATA_PATH`, using real Linux
   `syncfs`; it then removed its exact test root and temporary binaries.
@@ -161,10 +178,7 @@ the measured resident controller increment here is about 6.9 MiB.
 
 ## Remaining B1 work
 
-- implement managed folder reconciliation and foreign-marker/foreign-instance
-  UI reporting;
-- implement the existing-identity disposable-copy migration path;
 - exercise controller death, direct-upstream death, and Jawaka death/restart
   guardian cases with an active upstream workload;
 - repeat the relevant footprint and removal checks once real card bindings and
-  folders exist.
+  folders exist, including the required write-boundary failure matrix.

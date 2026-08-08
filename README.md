@@ -40,9 +40,10 @@ disposable-copy migration that never replaces an existing certificate/key),
 the token-preserving private-socket/LAN-only initial profile, and canonical
 cross-language fixture tests. The source tree also contains the unfinished B1
 controller: supervised upstream lifecycle, strict PATH-2 card enrollment and
-inventory, and the private UI control socket. The B0a package assembler does
-not include or launch that controller, and the C/Catastrophe UI and folder
-onboarding remain unfinished. Its launcher exits with an explicit
+inventory, fail-closed pre-B3 folder/conflict reconciliation, and the private
+UI control socket. The B0a package assembler does not include or launch that
+controller, and the C/Catastrophe UI and folder onboarding remain unfinished.
+Its launcher exits with an explicit
 qualification-only message so a staged spike cannot be mistaken for the
 finished app. `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will

@@ -79,7 +79,9 @@ Card rows freeze physical identity, current slot/root, state (`absent`,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
 identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
 versioning, and scoped issues. Counts and byte sizes are non-negative; an empty
-timestamp is unknown. B1 returns empty folder rows until folder onboarding.
+timestamp is unknown. B1 normally returns no folder rows because B3 owns
+onboarding; if a strict Leaf binding already exists, B1 forces it paused before
+spawn and returns its reconciled safety state and issues.
 
 ## `card.enroll`
 
