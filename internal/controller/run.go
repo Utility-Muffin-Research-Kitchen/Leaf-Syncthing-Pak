@@ -233,7 +233,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			status.Store(updated)
 			return updated, nil
 		},
-		PlanFolder: func(sourceID, kind, folderType string) (uicontrol.Status, *uicontrol.ProtocolError) {
+		PlanFolder: func(sourceID, kind, folderType string, deviceIDs []string) (uicontrol.Status, *uicontrol.ProtocolError) {
 			if b3Folders == nil {
 				return uicontrol.Status{}, b3OperationError(errors.New("folder setup is unavailable"))
 			}
@@ -243,7 +243,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			}
 			planContext, cancel := context.WithTimeout(ctx, 8*time.Second)
 			defer cancel()
-			plan, planErr := onboarding.Plan(planContext, sourceID, kind, folderType, session.Identity.DeviceID, inventory, session.Folders, b3Folders)
+			plan, planErr := onboarding.Plan(planContext, sourceID, kind, folderType, session.Identity.DeviceID, deviceIDs, inventory, session.Folders, b3Folders)
 			if planErr != nil {
 				return uicontrol.Status{}, b3OperationError(planErr)
 			}

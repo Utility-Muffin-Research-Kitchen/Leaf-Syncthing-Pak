@@ -615,14 +615,24 @@ static bool ls_ui_valid_folder_type(const char *folder_type) {
 
 int ls_ui_folder_onboard_plan(const char *socket_path, const char *source_id,
                               const char *kind, const char *folder_type,
+                              const char *const *device_ids, size_t device_count,
                               ls_ui_status *status, char *error, size_t error_size) {
     cJSON *arguments = cJSON_CreateObject();
-    if (!arguments || !source_id || !kind ||
+    cJSON *devices;
+    size_t index;
+    if (!arguments || !source_id || !kind || !device_ids ||
+        device_count == 0 || device_count > LS_UI_MAX_PEERS ||
         (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0) ||
         !ls_ui_valid_folder_type(folder_type) ||
         !cJSON_AddStringToObject(arguments, "source_id", source_id) ||
         !cJSON_AddStringToObject(arguments, "kind", kind) ||
         !cJSON_AddStringToObject(arguments, "folder_type", folder_type)) goto invalid;
+    devices = cJSON_AddArrayToObject(arguments, "device_ids");
+    if (!devices) goto invalid;
+    for (index = 0; index < device_count; index++) {
+        if (!device_ids[index] || !device_ids[index][0] ||
+            !cJSON_AddItemToArray(devices, cJSON_CreateString(device_ids[index]))) goto invalid;
+    }
     return ls_ui_exchange(socket_path, "folder.onboard.plan", arguments, status, error, error_size);
 invalid:
     cJSON_Delete(arguments);

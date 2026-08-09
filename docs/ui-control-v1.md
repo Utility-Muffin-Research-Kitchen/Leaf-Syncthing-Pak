@@ -190,6 +190,17 @@ snapshot/version inventory. Pause state is durable before the upstream pause
 request. A rescan requested while paused is durable and queued. Resume refuses
 while any non-manual reason remains, including B3's `first-sync` reason.
 
+Creating a folder requires an explicit, non-empty peer selection:
+
+```json
+{"v":1,"id":"folder-plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"]}}
+```
+
+The controller checks that every selected ID is a unique configured peer both
+when it creates the review and when it consumes the plan. Peers added after the
+review are not silently included. The foreground UI presents the configured
+peers as an Include/Exclude checklist before requesting the review.
+
 ## Folder-offer planning
 
 `status.get` exposes pending offers without accepting them. To review one

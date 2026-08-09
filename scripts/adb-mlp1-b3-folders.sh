@@ -153,7 +153,7 @@ verify_receive_folder() {
     local tag=$4
     local plan create denied prepared started folder_id plan_id snapshot_name snapshot_root config
 
-    plan="$(ui_request "{\"v\":1,\"id\":\"$tag-plan\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$source_id\",\"kind\":\"saves\",\"folder_type\":\"sendreceive\"}}")"
+    plan="$(ui_request "{\"v\":1,\"id\":\"$tag-plan\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$source_id\",\"kind\":\"saves\",\"folder_type\":\"sendreceive\",\"device_ids\":[\"$hub_id\"]}}")"
     require_ok "$plan"
     [[ "$(json_value "$plan" result.onboarding.path)" == "$expected_path" ]]
     [[ "$(json_value "$plan" result.onboarding.file_count)" -ge 1 ]]
@@ -299,12 +299,12 @@ primary_folder="$(verify_receive_folder "$primary_source" "$PRIMARY_ROOT/Saves" 
 secondary_folder="$(verify_receive_folder "$secondary_source" "$SECONDARY_ROOT/Saves" "$secondary_userdata" secondary)"
 [[ "$primary_folder" != "$secondary_folder" ]]
 
-foreign="$(ui_request "{\"v\":1,\"id\":\"foreign-states\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$secondary_source\",\"kind\":\"states\",\"folder_type\":\"sendreceive\"}}")"
+foreign="$(ui_request "{\"v\":1,\"id\":\"foreign-states\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$secondary_source\",\"kind\":\"states\",\"folder_type\":\"sendreceive\",\"device_ids\":[\"$hub_id\"]}}")"
 require_failure "$foreign"
 [[ "$(json_value "$foreign" error.code)" == foreign-folder-manager ]]
 "${ADB[@]}" shell "rm -rf '$SECONDARY_ROOT/States/.stfolder'"
 
-states_plan="$(ui_request "{\"v\":1,\"id\":\"states-plan\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$primary_source\",\"kind\":\"states\",\"folder_type\":\"sendonly\"}}")"
+states_plan="$(ui_request "{\"v\":1,\"id\":\"states-plan\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$primary_source\",\"kind\":\"states\",\"folder_type\":\"sendonly\",\"device_ids\":[\"$hub_id\"]}}")"
 require_ok "$states_plan"
 [[ "$(json_value "$states_plan" result.onboarding.states_warning)" == true ]]
 states_plan_id="$(json_value "$states_plan" result.onboarding.plan_id)"
@@ -317,7 +317,7 @@ response="$(ui_request "{\"v\":1,\"id\":\"states-start\",\"op\":\"folder.first-s
 require_ok "$response"
 "${ADB[@]}" shell "grep -F '\"mode\":\"sendonly\"' '$userdata/Syncthing/snapshots/states/.leaf-first-sync.json' >/dev/null"
 
-duplicate="$(ui_request "{\"v\":1,\"id\":\"duplicate-primary\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$primary_source\",\"kind\":\"saves\",\"folder_type\":\"sendreceive\"}}")"
+duplicate="$(ui_request "{\"v\":1,\"id\":\"duplicate-primary\",\"op\":\"folder.onboard.plan\",\"args\":{\"source_id\":\"$primary_source\",\"kind\":\"saves\",\"folder_type\":\"sendreceive\",\"device_ids\":[\"$hub_id\"]}}")"
 require_failure "$duplicate"
 
 response="$(ui_request "{\"v\":1,\"id\":\"to-sendonly\",\"op\":\"folder.type.set\",\"args\":{\"folder_id\":\"$primary_folder\",\"folder_type\":\"sendonly\",\"confirmed\":true}}")"

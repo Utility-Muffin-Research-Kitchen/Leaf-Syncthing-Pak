@@ -255,7 +255,7 @@ type Operations struct {
 	GatewayAction     func(string) (Status, *ProtocolError)
 	FolderAction      func(string, string, string) (Status, *ProtocolError)
 	FolderInspect     func(string) (Status, *ProtocolError)
-	PlanFolder        func(string, string, string) (Status, *ProtocolError)
+	PlanFolder        func(string, string, string, []string) (Status, *ProtocolError)
 	PlanFolderOffer   func(string, string, string, string, string) (Status, *ProtocolError)
 	CreateFolder      func(string, bool, bool) (Status, *ProtocolError)
 	PrepareFirstSync  func(string) (Status, *ProtocolError)
@@ -392,12 +392,12 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operations.PlanFolder == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
 		}
-		sourceID, kind, folderType, err := decodeOnboardingPlanArguments(request.Arguments)
+		sourceID, kind, folderType, deviceIDs, err := decodeOnboardingPlanArguments(request.Arguments)
 		if err != nil {
-			return failure(responseID, "bad-arguments", "folder.onboard.plan requires a valid source, kind, and folder type")
+			return failure(responseID, "bad-arguments", "folder.onboard.plan requires a valid source, kind, folder type, and peer selection")
 		}
 		var operationError *ProtocolError
-		status, operationError = operations.PlanFolder(sourceID, kind, folderType)
+		status, operationError = operations.PlanFolder(sourceID, kind, folderType, deviceIDs)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
@@ -574,23 +574,30 @@ func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
 	return arguments.SourceID, nil
 }
 
-func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string, error) {
+func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string, []string, error) {
 	var arguments struct {
-		SourceID   string `json:"source_id"`
-		Kind       string `json:"kind"`
-		FolderType string `json:"folder_type"`
+		SourceID   string   `json:"source_id"`
+		Kind       string   `json:"kind"`
+		FolderType string   `json:"folder_type"`
+		DeviceIDs  []string `json:"device_ids"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&arguments); err != nil {
-		return "", "", "", err
+		return "", "", "", nil, err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.SourceID) ||
 		(arguments.Kind != "saves" && arguments.Kind != "states") ||
-		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") {
-		return "", "", "", errors.New("invalid onboarding plan arguments")
+		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") ||
+		len(arguments.DeviceIDs) == 0 || len(arguments.DeviceIDs) > 32 {
+		return "", "", "", nil, errors.New("invalid onboarding plan arguments")
 	}
-	return arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+	for _, deviceID := range arguments.DeviceIDs {
+		if !validIdentifier(deviceID) {
+			return "", "", "", nil, errors.New("invalid onboarding peer selection")
+		}
+	}
+	return arguments.SourceID, arguments.Kind, arguments.FolderType, arguments.DeviceIDs, nil
 }
 
 func decodeFolderOfferPlanArguments(raw json.RawMessage) (string, string, string, string, string, error) {

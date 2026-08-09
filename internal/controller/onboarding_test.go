@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	onboardingSelf = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
-	onboardingPeer = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	onboardingSelf      = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+	onboardingPeer      = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	onboardingOtherPeer = "CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ"
 )
 
 type fakeManagedFolderUpstream struct {
@@ -46,7 +47,7 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer}}
+	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer, onboardingOtherPeer}}
 	syncCalls := []string{}
 	manager := newOnboardingManager(onboardingOptions{
 		Now:            func() time.Time { return time.Date(2026, time.August, 9, 12, 0, 0, 0, time.UTC) },
@@ -57,7 +58,7 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 			return nil
 		},
 	})
-	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,8 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(upstream.added) != 1 || !folder.Paused || folder.Type != "sendreceive" ||
-		folder.VersioningType != "simple" || folder.VersioningFSType != "basic" || len(folder.Devices) != 2 {
+		folder.VersioningType != "simple" || folder.VersioningFSType != "basic" || len(folder.Devices) != 2 ||
+		folder.Devices[0] != onboardingSelf || folder.Devices[1] != onboardingPeer {
 		t.Fatalf("created folder = %+v, API=%+v", folder, upstream.added)
 	}
 	if !controls.Snapshot()[folder.ID].FirstSync || controls.Snapshot()[folder.ID].PendingAdd {
@@ -100,8 +102,7 @@ func TestFolderOfferPlanKeepsNetworkIDAndOnlyOfferingPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherPeer := "CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ"
-	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer, otherPeer}}
+	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer, onboardingOtherPeer}}
 	manager := newOnboardingManager(onboardingOptions{
 		Random:         strings.NewReader(strings.Repeat("h", 16)),
 		AvailableBytes: func(string) (uint64, error) { return 64 * 1024 * 1024, nil },
@@ -129,6 +130,26 @@ func TestFolderOfferPlanKeepsNetworkIDAndOnlyOfferingPeer(t *testing.T) {
 	}
 }
 
+func TestSelectedFolderDevicesRequireExplicitConfiguredPeers(t *testing.T) {
+	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer, onboardingOtherPeer}}
+	devices, err := selectedFolderDevices(context.Background(), onboardingSelf, []string{onboardingPeer}, upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 2 || devices[0] != onboardingSelf || devices[1] != onboardingPeer {
+		t.Fatalf("selected devices = %v", devices)
+	}
+	for _, selected := range [][]string{
+		nil,
+		{onboardingPeer, onboardingPeer},
+		{"QQQQQQQ-RRRRRRR-SSSSSSS-TTTTTTT-UUUUUUU-VVVVVVV-WWWWWWW-XXXXXXX"},
+	} {
+		if _, err := selectedFolderDevices(context.Background(), onboardingSelf, selected, upstream); err == nil {
+			t.Fatalf("unsafe peer selection accepted: %v", selected)
+		}
+	}
+}
+
 func TestFolderOnboardingRefusesForeignManagerAndDuplicateBinding(t *testing.T) {
 	fixture := newFirstSyncFixture(t, "sendreceive")
 	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer}}
@@ -139,13 +160,13 @@ func TestFolderOnboardingRefusesForeignManagerAndDuplicateBinding(t *testing.T) 
 	if err := os.Mkdir(filepath.Join(fixture.folder.Path, ".stfolder"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, nil, upstream); !errors.Is(err, cards.ErrForeignMarker) {
+	if _, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream); !errors.Is(err, cards.ErrForeignMarker) {
 		t.Fatalf("foreign marker error = %v", err)
 	}
 	if err := os.Remove(filepath.Join(fixture.folder.Path, ".stfolder")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, []syncthing.ConfiguredFolder{fixture.folder}, upstream); err == nil || !strings.Contains(err.Error(), "already") {
+	if _, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, []syncthing.ConfiguredFolder{fixture.folder}, upstream); err == nil || !strings.Contains(err.Error(), "already") {
 		t.Fatalf("duplicate folder error = %v", err)
 	}
 }
@@ -165,7 +186,7 @@ func TestFolderOnboardingRefusesReceiveFolderWithoutCurrentSnapshotSpace(t *test
 		AvailableBytes: func(string) (uint64, error) { return 1, nil },
 		SyncFilesystem: func(string) error { return nil },
 	})
-	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +205,7 @@ func TestFolderOnboardingRefusesReceiveFolderWithoutCurrentSnapshotSpace(t *test
 	if _, err := os.Lstat(filepath.Join(fixture.folder.Path, fixture.folder.MarkerName)); !os.IsNotExist(err) {
 		t.Fatalf("space rejection created managed marker: %v", err)
 	}
-	sendOnlyPlan, err := manager.Plan(context.Background(), "primary", "saves", "sendonly", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	sendOnlyPlan, err := manager.Plan(context.Background(), "primary", "saves", "sendonly", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +234,7 @@ func TestFolderOnboardingRechecksSnapshotSpaceAtCreate(t *testing.T) {
 		AvailableBytes: func(string) (uint64, error) { return available, nil },
 		SyncFilesystem: func(string) error { return nil },
 	})
-	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +267,7 @@ func TestFolderOnboardingRollsBackControlStateAfterAPIFailure(t *testing.T) {
 		AvailableBytes: func(string) (uint64, error) { return 64 * 1024 * 1024, nil },
 		SyncFilesystem: func(string) error { return nil },
 	})
-	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendreceive", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +289,7 @@ func TestFolderOnboardingPlanExpiresAndDetectsCardSwap(t *testing.T) {
 		SyncFilesystem: func(string) error { return nil },
 	})
 	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer}}
-	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendonly", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "saves", "sendonly", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +316,7 @@ func TestStatesOnboardingRequiresItsSpecificWarning(t *testing.T) {
 		SyncFilesystem: func(string) error { return nil },
 	})
 	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer}}
-	plan, err := manager.Plan(context.Background(), "primary", "states", "sendonly", onboardingSelf, []cards.Card{fixture.card}, nil, upstream)
+	plan, err := manager.Plan(context.Background(), "primary", "states", "sendonly", onboardingSelf, []string{onboardingPeer}, []cards.Card{fixture.card}, nil, upstream)
 	if err != nil {
 		t.Fatal(err)
 	}

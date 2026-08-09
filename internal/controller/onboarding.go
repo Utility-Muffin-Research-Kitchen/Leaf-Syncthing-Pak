@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,7 @@ type onboardingPlan struct {
 	PeerCount        int
 	StatesWarning    bool
 	OfferDeviceID    string
+	Devices          []string
 	ExpiresAt        time.Time
 }
 
@@ -85,8 +87,8 @@ func newOnboardingManager(options onboardingOptions) *onboardingManager {
 	return &onboardingManager{options: options, plans: make(map[string]onboardingPlan)}
 }
 
-func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, folderType, selfDeviceID string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
-	return manager.plan(ctx, sourceID, kind, folderType, "", "", "", selfDeviceID, inventory, configured, upstream)
+func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, folderType, selfDeviceID string, deviceIDs []string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
+	return manager.plan(ctx, sourceID, kind, folderType, "", "", "", selfDeviceID, deviceIDs, inventory, configured, upstream)
 }
 
 func (manager *onboardingManager) PlanOffer(ctx context.Context, sourceID, kind, folderType, folderID, label, offerDeviceID, selfDeviceID string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
@@ -101,10 +103,10 @@ func (manager *onboardingManager) PlanOffer(ctx context.Context, sourceID, kind,
 	if !validOnboardingLabel(label) {
 		label = "Leaf " + folderKindLabel(kind)
 	}
-	return manager.plan(ctx, sourceID, kind, folderType, folderID, label, normalizedDeviceID, selfDeviceID, inventory, configured, upstream)
+	return manager.plan(ctx, sourceID, kind, folderType, folderID, label, normalizedDeviceID, selfDeviceID, []string{normalizedDeviceID}, inventory, configured, upstream)
 }
 
-func (manager *onboardingManager) plan(ctx context.Context, sourceID, kind, folderType, offeredFolderID, offeredLabel, offerDeviceID, selfDeviceID string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
+func (manager *onboardingManager) plan(ctx context.Context, sourceID, kind, folderType, offeredFolderID, offeredLabel, offerDeviceID, selfDeviceID string, deviceIDs []string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.expireLocked()
@@ -141,13 +143,9 @@ func (manager *onboardingManager) plan(ctx context.Context, sourceID, kind, fold
 	if err != nil {
 		return onboardingPlan{}, err
 	}
-	peerCount := 1
-	if offerDeviceID == "" {
-		devices, err := upstream.ConfiguredFolderDevices(ctx, selfDeviceID)
-		if err != nil {
-			return onboardingPlan{}, err
-		}
-		peerCount = len(devices) - 1
+	devices, err := selectedFolderDevices(ctx, selfDeviceID, deviceIDs, upstream)
+	if err != nil {
+		return onboardingPlan{}, err
 	}
 	random := make([]byte, 16)
 	if _, err := io.ReadFull(manager.options.Random, random); err != nil {
@@ -159,8 +157,9 @@ func (manager *onboardingManager) plan(ctx context.Context, sourceID, kind, fold
 		Path: path, MarkerName: markerName,
 		VersioningPath: filepath.Join(card.Source.UserdataPath, leaf.AppStateName, "versions", kind),
 		FileCount:      files, DirectoryCount: directories, ContentBytes: contentBytes, AvailableBytes: available,
-		SnapshotPossible: snapshotFits(contentBytes, available), PeerCount: peerCount,
+		SnapshotPossible: snapshotFits(contentBytes, available), PeerCount: len(devices) - 1,
 		StatesWarning: kind == "states", OfferDeviceID: offerDeviceID,
+		Devices:   append([]string(nil), devices...),
 		ExpiresAt: manager.options.Now().Add(onboardingPlanLifetime),
 	}
 	manager.plans[plan.ID] = plan
@@ -207,18 +206,12 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 			return syncthing.ConfiguredFolder{}, errors.New("insufficient free space for a same-card safety snapshot")
 		}
 	}
-	devices := []string{}
-	if plan.OfferDeviceID != "" {
-		self, err := syncthing.NormalizeDeviceID(selfDeviceID)
-		if err != nil {
-			return syncthing.ConfiguredFolder{}, errors.New("the local Syncthing device identity is invalid")
-		}
-		devices = []string{self, plan.OfferDeviceID}
-	} else {
-		devices, err = upstream.ConfiguredFolderDevices(ctx, selfDeviceID)
-		if err != nil {
-			return syncthing.ConfiguredFolder{}, err
-		}
+	if len(plan.Devices) < 2 {
+		return syncthing.ConfiguredFolder{}, errors.New("folder setup plan has no selected peers")
+	}
+	devices, err := selectedFolderDevices(ctx, selfDeviceID, plan.Devices[1:], upstream)
+	if err != nil {
+		return syncthing.ConfiguredFolder{}, err
 	}
 	if err := prepareOnboardingStorage(card, plan.Kind, plan.FolderType, plan.MarkerName, manager.options.SyncFilesystem); err != nil {
 		return syncthing.ConfiguredFolder{}, err
@@ -253,6 +246,43 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 	}
 	delete(manager.plans, plan.ID)
 	return folder, nil
+}
+
+func selectedFolderDevices(ctx context.Context, selfDeviceID string, selected []string, upstream managedFolderUpstream) ([]string, error) {
+	self, err := syncthing.NormalizeDeviceID(selfDeviceID)
+	if err != nil {
+		return nil, errors.New("the local Syncthing device identity is invalid")
+	}
+	if len(selected) == 0 || len(selected) > 32 {
+		return nil, errors.New("select at least one and at most 32 configured peers")
+	}
+	configured, err := upstream.ConfiguredFolderDevices(ctx, self)
+	if err != nil {
+		return nil, err
+	}
+	available := make(map[string]bool, len(configured))
+	for _, rawDeviceID := range configured {
+		deviceID, normalizeErr := syncthing.NormalizeDeviceID(rawDeviceID)
+		if normalizeErr != nil {
+			return nil, errors.New("the configured Syncthing device list is invalid")
+		}
+		available[deviceID] = true
+	}
+	if !available[self] {
+		return nil, errors.New("the configured Syncthing device list does not contain this device")
+	}
+	peers := make([]string, 0, len(selected))
+	seen := make(map[string]bool, len(selected))
+	for _, rawDeviceID := range selected {
+		deviceID, normalizeErr := syncthing.NormalizeDeviceID(rawDeviceID)
+		if normalizeErr != nil || deviceID == self || seen[deviceID] || !available[deviceID] {
+			return nil, errors.New("selected peers must be unique configured Syncthing devices")
+		}
+		seen[deviceID] = true
+		peers = append(peers, deviceID)
+	}
+	sort.Strings(peers)
+	return append([]string{self}, peers...), nil
 }
 
 func (manager *onboardingManager) expireLocked() {

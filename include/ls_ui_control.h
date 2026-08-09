@@ -213,6 +213,8 @@ int ls_ui_folder_onboard_plan(const char *socket_path,
                               const char *source_id,
                               const char *kind,
                               const char *folder_type,
+                              const char *const *device_ids,
+                              size_t device_count,
                               ls_ui_status *status,
                               char *error,
                               size_t error_size);

@@ -442,6 +442,61 @@ static int ls_choose_folder_card(ls_app *app, char *source_id, size_t source_siz
     return 0;
 }
 
+static int ls_choose_folder_peers(ls_app *app, const char **device_ids, size_t *device_count) {
+    static cat_option choices[] = {
+        {.label = "Exclude", .value = "exclude"},
+        {.label = "Include", .value = "include"},
+    };
+    cat_options_item items[LS_UI_MAX_PEERS];
+    int peer_indexes[LS_UI_MAX_PEERS];
+    cat_footer_item footer[] = {
+        {.button = CAT_BTN_B, .label = "Cancel"},
+        {.button = CAT_BTN_LEFT, .label = "Change", .button_text = "<->"},
+        {.button = CAT_BTN_START, .label = "Continue", .is_confirm = true},
+    };
+    cat_options_list_opts options = {0};
+    cat_options_list_result result = {0};
+    int index;
+    int count = 0;
+    if (!app || !device_ids || !device_count) return -1;
+    memset(items, 0, sizeof(items));
+    for (index = 0; index < app->status.peer_count; index++) {
+        ls_ui_peer *peer = &app->status.peers[index];
+        if (peer->pending || !peer->id[0]) continue;
+        items[count] = (cat_options_item){
+            .label = peer->name,
+            .type = CAT_OPT_STANDARD,
+            .options = choices,
+            .option_count = 2,
+            .selected_option = 1,
+        };
+        peer_indexes[count++] = index;
+    }
+    if (count == 0) {
+        ls_message("Add or accept at least one Syncthing peer before creating a folder.");
+        return -1;
+    }
+    options.title = "Share With";
+    options.items = items;
+    options.item_count = count;
+    options.footer = footer;
+    options.footer_count = cat_hints_enabled_from_env() ? 3 : 0;
+    options.confirm_button = CAT_BTN_START;
+    options.help_text = "Choose exactly which configured devices receive this folder. A device added later is not included automatically.";
+    for (;;) {
+        if (cat_options_list(&options, &result) == CAT_CANCELLED || result.action == CAT_ACTION_BACK)
+            return -1;
+        if (result.action != CAT_ACTION_CONFIRMED) continue;
+        *device_count = 0;
+        for (index = 0; index < count; index++) {
+            if (items[index].selected_option == 1)
+                device_ids[(*device_count)++] = app->status.peers[peer_indexes[index]].id;
+        }
+        if (*device_count > 0) return 0;
+        ls_message("Select at least one peer for this folder.");
+    }
+}
+
 static void ls_first_sync_flow(ls_app *app, const char *folder_id) {
     ls_ui_folder *folder;
     char stable_id[128];
@@ -515,6 +570,8 @@ static void ls_add_folder(ls_app *app) {
     char source_id[65];
     const char *folder_type;
     const char *kind;
+    const char *device_ids[LS_UI_MAX_PEERS];
+    size_t device_count = 0;
     int kind_index;
     int states_acknowledged = 0;
     ls_ui_onboarding plan;
@@ -530,11 +587,13 @@ static void ls_add_folder(ls_app *app) {
             "I understand");
         if (!states_acknowledged) return;
     }
+    if (ls_choose_folder_peers(app, device_ids, &device_count) != 0) return;
     folder_type = ls_choose_folder_type("Sync Direction");
     if (!folder_type) return;
 
 review:
     if (ls_ui_folder_onboard_plan(app->control_socket, source_id, kind, folder_type,
+                                  device_ids, device_count,
                                   &app->status, app->error, sizeof(app->error)) != 0) {
         ls_message(app->error);
         return;

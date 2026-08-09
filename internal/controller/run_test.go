@@ -332,6 +332,8 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		State: cards.StateEnrolled, Present: true, Writable: true,
 	}
 	upstream := newFakeB3Upstream()
+	upstream.devices = append(upstream.devices,
+		"CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ")
 	runner := Runner{
 		Config: config,
 		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
@@ -340,8 +342,12 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		Recover: func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
 			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
 		},
-		EnsureIdentity: successfulIdentity,
-		ApplyPause:     successfulPause,
+		EnsureIdentity: func(ctx context.Context, options syncthingconfig.IdentityOptions, recovery syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+			identity, err := successfulIdentity(ctx, options, recovery)
+			identity.DeviceID = onboardingSelf
+			return identity, err
+		},
+		ApplyPause: successfulPause,
 		StartProcess: func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
 			return upstream, nil
 		},
@@ -356,7 +362,7 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	waitForControlSocket(t, config.ControlSocket)
 
 	plan := sendUIControlRequest(t, config.ControlSocket,
-		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`)
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"]}}`)
 	if !plan.OK || plan.Result == nil || plan.Result.Onboarding == nil || plan.Result.Onboarding.FileCount != 1 || !plan.Result.Onboarding.SnapshotPossible {
 		t.Fatalf("onboarding plan = %+v", plan)
 	}
@@ -368,6 +374,10 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		t.Fatalf("onboarding create = %+v", create)
 	}
 	folderID := create.Result.Folders[0].ID
+	if folder := upstream.folders[folderID]; len(folder.Devices) != 2 ||
+		folder.Devices[1] != "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP" {
+		t.Fatalf("explicit folder peer selection = %v", folder.Devices)
+	}
 	prepare := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
 		`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"%s","confirmed":true,"snapshot_limit_acknowledged":true}}`, folderID))
 	if !prepare.OK || prepare.Result == nil || prepare.Result.Folders[0].FirstSyncState != "ready" ||

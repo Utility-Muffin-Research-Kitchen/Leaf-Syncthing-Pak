@@ -273,9 +273,13 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 
 func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t *testing.T) {
 	called := ""
+	selectedPeer := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
 	operations := Operations{
 		Status: fixtureStatus,
-		PlanFolder: func(sourceID, kind, folderType string) (Status, *ProtocolError) {
+		PlanFolder: func(sourceID, kind, folderType string, deviceIDs []string) (Status, *ProtocolError) {
+			if len(deviceIDs) != 1 || deviceIDs[0] != selectedPeer {
+				t.Fatalf("onboarding selected peers = %v", deviceIDs)
+			}
 			called = sourceID + ":" + kind + ":" + folderType
 			status := fixtureStatus()
 			status.Onboarding = &OnboardingStatus{
@@ -323,11 +327,11 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 			return fixtureStatus(), nil
 		},
 	}
-	response := operations.Handle([]byte(`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
+	response := operations.Handle([]byte(`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["` + selectedPeer + `"]}}`))
 	if !response.OK || called != "primary:saves:sendreceive" || response.Result == nil || response.Result.Onboarding == nil {
 		t.Fatalf("onboarding plan = %+v, called=%q", response, called)
 	}
-	offerDeviceID := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	offerDeviceID := selectedPeer
 	response = operations.Handle([]byte(`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"` + offerDeviceID + `","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
 	if !response.OK || called != "retro-saves:primary:saves:sendreceive" || response.Result == nil ||
 		response.Result.Onboarding == nil || !response.Result.Onboarding.JoinExisting || response.Result.Onboarding.OfferDeviceID != offerDeviceID {
@@ -351,6 +355,8 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 	}
 
 	for _, request := range []string{
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":[]}}`,
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"roms","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"../bad","device_id":"peer","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":false}}`,
