@@ -5,6 +5,10 @@ through Pak Rat; this repository is not part of Leaf's default release payload.
 
 Current work is the B0a upstream and platform qualification described in
 `umrk-workspace/plans/leaf-syncthing/phases/phase-b0a-upstream-spike.md`.
+The repository also contains the landed Go side of the shared CTL-1/LIFE-1
+framed JSON transport and its canonical cross-language fixture tests. Local
+tests expect the sibling `../umrk-workspace`; CI checks out the explicitly
+pinned contract revision.
 
 ```sh
 make verify-upstream

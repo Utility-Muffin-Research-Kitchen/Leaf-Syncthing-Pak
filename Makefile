@@ -25,7 +25,7 @@ package-mlp1: verify-upstream gateway-mlp1
 	$(PYTHON) scripts/package_mlp1.py
 
 test:
-	$(GO) test ./internal/leaf ./cmd/b0a-gateway-spike
+	$(GO) test ./...
 
 clean:
 	rm -rf build workdir
