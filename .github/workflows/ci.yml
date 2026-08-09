@@ -22,12 +22,23 @@ jobs:
         with:
           repository: Utility-Muffin-Research-Kitchen/umrk-workspace
           ref: 5ab17d82c122b481f15c835e6ff9a21829d45aa9
+          ssh-key: ${{ secrets.UMRK_WORKSPACE_DEPLOY_KEY }}
           path: umrk-workspace
+
+      - name: Check out pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: e1ddd5dcb1d0f4d37df1db811e7133a2f53109a7
+          path: Catastrophe
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: Leaf-Syncthing-Pak/go.mod
+
+      - name: Install native test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
       - name: Test
         run: go test ./...

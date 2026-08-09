@@ -1,6 +1,7 @@
 package life1
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -151,4 +152,37 @@ func TestEncodeRejectsSemanticOversize(t *testing.T) {
 	if _, err := Encode(payload); !errors.Is(err, ErrSemanticLimit) {
 		t.Fatalf("Encode() error = %v, want %v", err, ErrSemanticLimit)
 	}
+}
+
+func TestReadAndWriteHandleShortIO(t *testing.T) {
+	payload := json.RawMessage(`{"v":1,"op":"game.state","id":"7"}`)
+	var output shortWriter
+	if err := Write(&output, payload); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Read(&shortReader{reader: bytes.NewReader(output.Bytes())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, payload) {
+		t.Fatalf("decoded = %s, want %s", decoded, payload)
+	}
+}
+
+type shortWriter struct{ bytes.Buffer }
+
+func (w *shortWriter) Write(contents []byte) (int, error) {
+	if len(contents) > 3 {
+		contents = contents[:3]
+	}
+	return w.Buffer.Write(contents)
+}
+
+type shortReader struct{ reader *bytes.Reader }
+
+func (r *shortReader) Read(contents []byte) (int, error) {
+	if len(contents) > 2 {
+		contents = contents[:2]
+	}
+	return r.reader.Read(contents)
 }

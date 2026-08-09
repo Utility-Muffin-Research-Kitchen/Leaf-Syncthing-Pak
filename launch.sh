@@ -18,7 +18,7 @@ USERDATA_PATH=${USERDATA_PATH:-$SDCARD_PATH/.userdata/$PLATFORM}
 LOGS_PATH=${LOGS_PATH:-$USERDATA_PATH/logs}
 mkdir -p "$LOGS_PATH"
 
-message="This is the B0a Syncthing qualification package; the production controller and UI are not implemented yet."
-printf '%s\n' "$message" | tee -a "$LOGS_PATH/leaf-syncthing-b0a.log"
-printf 'Pinned runtime: %s\n' "$PAK_DIR/bin/syncthing"
+message="The Syncthing B1 service is managed from Leaf Settings. Its device UI arrives in B2."
+printf '%s\n' "$message" | tee -a "$LOGS_PATH/leaf-syncthing-b1.log"
+printf 'Controller: %s\n' "$PAK_DIR/bin/leaf-syncthing"
 exit 1

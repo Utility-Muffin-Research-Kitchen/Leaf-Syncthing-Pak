@@ -1,9 +1,31 @@
 {
-  "name": "Syncthing (B0a qualification)",
+  "id": "org.umrk.syncthing",
+  "name": "Syncthing (B1 development)",
   "platform": "mlp1",
-  "pak_version": "0.0.0-b0a",
+  "pak_version": "0.0.0-b1",
   "min_jawaka_version": "0.5.5",
   "author": "Utility Muffin Research Kitchen",
   "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
-  "description": "Non-production B0a qualification package for the pinned Syncthing runtime."
+  "description": "Non-production B1 package for the supervised pinned Syncthing controller.",
+  "service": {
+    "schema": 1,
+    "id": "org.umrk.syncthing",
+    "run": {
+      "path": "bin/leaf-syncthing",
+      "args": ["service", "run"]
+    },
+    "restart": "on-failure",
+    "default_enabled": false,
+    "stop_grace_ms": 10000,
+    "lifecycle": {
+      "game": "notify",
+      "stop_on_storage_change": true,
+      "stop_on_suspend": true
+    }
+  },
+  "state": {
+    "root": "Syncthing",
+    "revoke_on_uninstall": ["leaf/trusted-clients.json"],
+    "retained_roots": ["Syncthing"]
+  }
 }

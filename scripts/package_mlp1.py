@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the non-production B0a MLP1 qualification package."""
+"""Assemble the non-production B1 MLP1 controller package."""
 
 from __future__ import annotations
 
@@ -35,9 +35,9 @@ def main() -> None:
     lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
     version = lock["version"]
     binary_archive = UPSTREAM_DIR / lock["binary"]["name"]
-    gateway = ROOT / "build" / "mlp1" / "bin" / "b0a-gateway-spike"
-    if not binary_archive.is_file() or not gateway.is_file():
-        raise SystemExit("verified upstream archive or gateway binary is missing")
+    controller = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing"
+    if not binary_archive.is_file() or not controller.is_file():
+        raise SystemExit("verified upstream archive or controller binary is missing")
 
     if PACKAGE_DIR.parent.exists():
         shutil.rmtree(PACKAGE_DIR.parent)
@@ -47,11 +47,12 @@ def main() -> None:
         copy_archive_member(package, f"{archive_root}/syncthing", PACKAGE_DIR / "bin" / "syncthing")
         copy_archive_member(package, f"{archive_root}/LICENSE.txt", PACKAGE_DIR / "licenses" / "Syncthing-MPL-2.0.txt")
 
-    shutil.copy2(gateway, PACKAGE_DIR / "bin" / "b0a-gateway-spike")
+    shutil.copy2(controller, PACKAGE_DIR / "bin" / "leaf-syncthing")
     shutil.copy2(ROOT / "launch.sh", PACKAGE_DIR / "launch.sh")
     shutil.copy2(ROOT / "pak.json", PACKAGE_DIR / "pak.json")
+    shutil.copy2(ROOT / "LICENSE", PACKAGE_DIR / "licenses" / "Leaf-Syncthing-Pak-MIT.txt")
     shutil.copy2(LOCK_PATH, PACKAGE_DIR / "licenses" / LOCK_PATH.name)
-    for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "b0a-gateway-spike"):
+    for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing"):
         executable.chmod(0o755)
 
     if ARCHIVE_PATH.exists():
