@@ -3,8 +3,9 @@
 Optional Syncthing packaging and device integration for Leaf. Distribution is
 through Pak Rat; this repository is not part of Leaf's default release payload.
 
-The completed B0a upstream/platform qualification is now the base for the B1
-controller work described in the sibling `umrk-workspace` plan. The production
+The completed B0a upstream/platform qualification and B1 controller are the
+base for the B2 device-management work described in the sibling
+`umrk-workspace` plan. The production
 split is a pure-Go resident controller/gateway plus a separate C/Catastrophe
 foreground UI; the copied cgo/Catastrophe probe remains qualification evidence
 only and is not part of the production UI architecture.
@@ -25,12 +26,19 @@ scripts/adb-mlp1-b1-card-safety.sh
 B1_MEASURE_SECONDS=600 scripts/adb-mlp1-b1-controller-smoke.sh
 ```
 
+After explicitly staging the B2 package and starting its service through
+Jawaka, exercise the real paired HTTPS boundary with:
+
+```sh
+ADB_SERIAL=serial scripts/adb-mlp1-b2-gateway-smoke.sh
+```
+
 The command downloads only the locked upstream release inputs, rejects an
 unexpected redirect host, verifies the release-key fingerprint and checksum
 signature, verifies the archive digest, checks the annotated tag's peeled
 commit, and inspects the archive layout without extracting it.
 
-The current package is intentionally labeled `0.0.0-b1`: it contains the
+The current package is intentionally labeled `0.0.0-b2`: it contains the
 verified upstream binary and the pure-Go resident controller with its LIFE-1
 transport, persistent subscribe/state-reconciliation client, the first six
 ordered controller startup steps (including recoverable
@@ -39,13 +47,15 @@ disposable-copy migration that never replaces an existing certificate/key),
 the token-preserving private-socket/LAN-only initial profile, and canonical
 cross-language fixture tests. The package service runs the supervised upstream
 lifecycle, strict PATH-2 card enrollment and inventory, fail-closed pre-B3
-folder/conflict reconciliation, and the private UI control socket. The B0a
-gateway spike remains source-only qualification evidence; the C/Catastrophe UI
-and folder onboarding remain unfinished. Its foreground launcher exits with an
-explicit development message while Jawaka owns the service entrypoint.
+folder/conflict reconciliation, and the private UI control socket. B2 adds the
+standalone C/Catastrophe UI, live folder/peer controls, enforced LAN-only and
+Sync Anywhere profiles, bounded settings/diagnostics/history views, crash-safe
+reset recovery, and the paired read-only HTTPS gateway selected by B0a. Guided
+folder onboarding and release of the durable first-sync pause remain B3 work.
+Jawaka owns the service entrypoint; the foreground launcher only opens the C UI.
 `Leaf-Syncthing-Pak` and
 `build/mlp1/package/Syncthing.pak` are stable staging contracts that will
-outlive this development artifact; the `0.0.0-b1` package itself must never enter a
+outlive this development artifact; the `0.0.0-b2` package itself must never enter a
 Leaf release or production Pak Rat catalog.
 
 Leaf can stage it only through the explicit optional-app path:
@@ -65,7 +75,7 @@ signer fingerprint and signatures, and checks every locked digest before the
 artifact can be packaged.
 Local tests expect `../umrk-workspace`; CI checks out the explicitly pinned
 contract revision beside this repository. `make test` runs all Go packages and
-the standalone C UI-protocol fixture check.
+the standalone C UI-protocol fixture and semantic-client checks.
 
 The UMRK controller and packaging code are MIT licensed. The bundled upstream
 Syncthing binary remains under MPL-2.0; both notices ship in the pak.

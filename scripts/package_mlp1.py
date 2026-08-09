@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the non-production B1 MLP1 controller package."""
+"""Assemble the non-production B2 MLP1 controller and UI package."""
 
 from __future__ import annotations
 
@@ -36,8 +36,9 @@ def main() -> None:
     version = lock["version"]
     binary_archive = UPSTREAM_DIR / lock["binary"]["name"]
     controller = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing"
-    if not binary_archive.is_file() or not controller.is_file():
-        raise SystemExit("verified upstream archive or controller binary is missing")
+    ui = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing-ui"
+    if not binary_archive.is_file() or not controller.is_file() or not ui.is_file():
+        raise SystemExit("verified upstream, controller, or device UI binary is missing")
 
     if PACKAGE_DIR.parent.exists():
         shutil.rmtree(PACKAGE_DIR.parent)
@@ -48,11 +49,13 @@ def main() -> None:
         copy_archive_member(package, f"{archive_root}/LICENSE.txt", PACKAGE_DIR / "licenses" / "Syncthing-MPL-2.0.txt")
 
     shutil.copy2(controller, PACKAGE_DIR / "bin" / "leaf-syncthing")
+    shutil.copy2(ui, PACKAGE_DIR / "bin" / "leaf-syncthing-ui")
     shutil.copy2(ROOT / "launch.sh", PACKAGE_DIR / "launch.sh")
     shutil.copy2(ROOT / "pak.json", PACKAGE_DIR / "pak.json")
     shutil.copy2(ROOT / "LICENSE", PACKAGE_DIR / "licenses" / "Leaf-Syncthing-Pak-MIT.txt")
+    shutil.copy2(ROOT / "third_party" / "qrcodegen.LICENSE", PACKAGE_DIR / "licenses" / "qrcodegen-MIT.txt")
     shutil.copy2(LOCK_PATH, PACKAGE_DIR / "licenses" / LOCK_PATH.name)
-    for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing"):
+    for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing-ui"):
         executable.chmod(0o755)
 
     if ARCHIVE_PATH.exists():

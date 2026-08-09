@@ -10,10 +10,26 @@ import (
 )
 
 const (
-	Version             = 1
-	OperationGet        = "status.get"
-	OperationEnrollCard = "card.enroll"
-	MaxIdentifier       = 64
+	Version                    = 1
+	OperationGet               = "status.get"
+	OperationEnrollCard        = "card.enroll"
+	OperationNetworkSet        = "network.profile.set"
+	OperationGatewayOpen       = "gateway.open"
+	OperationGatewayKeepAlive  = "gateway.keepalive"
+	OperationGatewayClose      = "gateway.close"
+	OperationGatewayExtend     = "gateway.extend"
+	OperationGatewayRevoke     = "gateway.revoke-all"
+	OperationFolderPause       = "folder.pause"
+	OperationFolderResume      = "folder.resume"
+	OperationFolderRescan      = "folder.rescan"
+	OperationFolderRename      = "folder.rename"
+	OperationFolderInspect     = "folder.inspect"
+	OperationDeviceAdd         = "device.add"
+	OperationDeviceRename      = "device.rename"
+	OperationResetPrepare      = "reset.prepare"
+	OperationLogLevelSet       = "log.level.set"
+	OperationDiagnosticsExport = "diagnostics.export"
+	MaxIdentifier              = 64
 )
 
 type Request struct {
@@ -37,14 +53,74 @@ type Response struct {
 }
 
 type Status struct {
-	Controller   string         `json:"controller"`
-	Upstream     UpstreamStatus `json:"upstream"`
-	Game         GameStatus     `json:"game"`
-	Recovery     RecoveryStatus `json:"recovery"`
-	Cards        []CardStatus   `json:"cards"`
-	Folders      []FolderStatus `json:"folders"`
-	Issues       []Issue        `json:"issues"`
-	Capabilities []string       `json:"capabilities"`
+	Controller   string             `json:"controller"`
+	Upstream     UpstreamStatus     `json:"upstream"`
+	Game         GameStatus         `json:"game"`
+	Recovery     RecoveryStatus     `json:"recovery"`
+	Network      *NetworkStatus     `json:"network,omitempty"`
+	Gateway      *GatewayStatus     `json:"gateway,omitempty"`
+	Transfer     *TransferStatus    `json:"transfer,omitempty"`
+	Logging      *LoggingStatus     `json:"logging,omitempty"`
+	Storage      *StorageStatus     `json:"storage,omitempty"`
+	Diagnostics  *DiagnosticsStatus `json:"diagnostics,omitempty"`
+	Cards        []CardStatus       `json:"cards"`
+	Folders      []FolderStatus     `json:"folders"`
+	Peers        []PeerStatus       `json:"peers,omitempty"`
+	Issues       []Issue            `json:"issues"`
+	Capabilities []string           `json:"capabilities"`
+}
+
+type NetworkStatus struct {
+	Profile         string   `json:"profile"`
+	AllowedNetworks []string `json:"allowed_networks"`
+	RouteChanged    bool     `json:"route_changed"`
+}
+
+type GatewayStatus struct {
+	Open             bool   `json:"open"`
+	URL              string `json:"url"`
+	PIN              string `json:"pin"`
+	QRURL            string `json:"qr_url"`
+	OfferExpires     string `json:"offer_expires"`
+	Fingerprint      string `json:"fingerprint"`
+	TrustedBrowsers  int    `json:"trusted_browsers"`
+	Pairing          bool   `json:"pairing"`
+	ExtensionExpires string `json:"extension_expires"`
+}
+
+type TransferStatus struct {
+	State       string `json:"state"`
+	LocalBytes  int64  `json:"local_bytes"`
+	GlobalBytes int64  `json:"global_bytes"`
+	NeedBytes   int64  `json:"need_bytes"`
+	InBytes     int64  `json:"in_bytes"`
+	OutBytes    int64  `json:"out_bytes"`
+}
+
+type LoggingStatus struct {
+	Level        string `json:"level"`
+	DebugExpires string `json:"debug_expires"`
+}
+
+type StorageStatus struct {
+	SnapshotBytes int64            `json:"snapshot_bytes"`
+	VersionBytes  int64            `json:"version_bytes"`
+	SnapshotCount int              `json:"snapshot_count"`
+	VersionGroups int              `json:"version_groups"`
+	Inventory     []SnapshotStatus `json:"inventory"`
+}
+
+type SnapshotStatus struct {
+	CardSuffix string `json:"card_suffix"`
+	Category   string `json:"category"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Bytes      int64  `json:"bytes"`
+}
+
+type DiagnosticsStatus struct {
+	LastExportPath string `json:"last_export_path"`
+	LastExported   string `json:"last_exported"`
 }
 
 type UpstreamStatus struct {
@@ -60,8 +136,12 @@ type GameStatus struct {
 }
 
 type RecoveryStatus struct {
-	State   string `json:"state"`
-	Changed bool   `json:"changed"`
+	State         string   `json:"state"`
+	Changed       bool     `json:"changed"`
+	PlanID        string   `json:"plan_id,omitempty"`
+	PlanAction    string   `json:"plan_action,omitempty"`
+	RemovePaths   []string `json:"remove_paths,omitempty"`
+	RetainedPaths []string `json:"retained_paths,omitempty"`
 }
 
 type CardStatus struct {
@@ -94,7 +174,22 @@ type FolderStatus struct {
 	PeerCount     int      `json:"peer_count"`
 	LastSync      string   `json:"last_sync"`
 	Versioning    string   `json:"versioning"`
+	ConflictCount int      `json:"conflict_count,omitempty"`
+	Conflicts     []string `json:"conflicts,omitempty"`
 	Issues        []Issue  `json:"issues"`
+}
+
+type PeerStatus struct {
+	ID           string `json:"id"`
+	IDSuffix     string `json:"id_suffix"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	Connection   string `json:"connection"`
+	Address      string `json:"address"`
+	Paused       bool   `json:"paused"`
+	Introducer   bool   `json:"introducer"`
+	IntroducedBy string `json:"introduced_by"`
+	Pending      bool   `json:"pending"`
 }
 
 type Issue struct {
@@ -105,8 +200,16 @@ type Issue struct {
 }
 
 type Operations struct {
-	Status     func() Status
-	EnrollCard func(string) (Status, *ProtocolError)
+	Status            func() Status
+	EnrollCard        func(string) (Status, *ProtocolError)
+	SetNetworkProfile func(string) (Status, *ProtocolError)
+	GatewayAction     func(string) (Status, *ProtocolError)
+	FolderAction      func(string, string, string) (Status, *ProtocolError)
+	FolderInspect     func(string) (Status, *ProtocolError)
+	DeviceAction      func(string, string, string) (Status, *ProtocolError)
+	PrepareReset      func(string) (Status, *ProtocolError)
+	SetLogLevel       func(string) (Status, *ProtocolError)
+	ExportDiagnostics func() (Status, *ProtocolError)
 }
 
 // Handle validates one request and returns one bounded response. Request
@@ -154,6 +257,133 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationNetworkSet:
+		if operations.SetNetworkProfile == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		profile, err := decodeNetworkProfileArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "network.profile.set requires a confirmed profile")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.SetNetworkProfile(profile)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationGatewayOpen, OperationGatewayKeepAlive, OperationGatewayClose:
+		if operations.GatewayAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		if !emptyObject(request.Arguments) {
+			return failure(responseID, "bad-arguments", "gateway operation requires empty args")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.GatewayAction(request.Operation)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationGatewayExtend, OperationGatewayRevoke:
+		if operations.GatewayAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		if err := decodeConfirmedArguments(request.Arguments); err != nil {
+			return failure(responseID, "bad-arguments", "gateway operation requires confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.GatewayAction(request.Operation)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderPause, OperationFolderResume, OperationFolderRescan:
+		if operations.FolderAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, err := decodeIDArguments(request.Arguments, "folder_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder operation requires one valid folder_id")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderAction(request.Operation, folderID, "")
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderInspect:
+		if operations.FolderInspect == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, err := decodeIDArguments(request.Arguments, "folder_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.inspect requires a valid folder_id")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderInspect(folderID)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderRename:
+		if operations.FolderAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, label, err := decodeNamedArguments(request.Arguments, "folder_id", "label", 96)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.rename requires a valid folder_id and label")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderAction(request.Operation, folderID, label)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationDeviceAdd, OperationDeviceRename:
+		if operations.DeviceAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		deviceID, name, err := decodeNamedArguments(request.Arguments, "device_id", "name", 64)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "device operation requires a bounded device_id and name")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.DeviceAction(request.Operation, deviceID, name)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationResetPrepare:
+		if operations.PrepareReset == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		action, err := decodeResetArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "reset.prepare requires the exact strong confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.PrepareReset(action)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationLogLevelSet:
+		if operations.SetLogLevel == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		level, err := decodeLogLevelArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "log.level.set requires a confirmed supported level")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.SetLogLevel(level)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationDiagnosticsExport:
+		if operations.ExportDiagnostics == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		if !emptyObject(request.Arguments) {
+			return failure(responseID, "bad-arguments", "diagnostics.export requires empty args")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.ExportDiagnostics()
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	default:
 		return failure(responseID, "unsupported-op", "unsupported UI control operation")
 	}
@@ -162,6 +392,38 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		return failure(responseID, "internal", "controller status unavailable")
 	}
 	return Response{Version: Version, ID: responseID, OK: true, Result: &status}
+}
+
+func decodeConfirmedArguments(raw json.RawMessage) error {
+	var arguments struct {
+		Confirmed bool `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed {
+		return errors.New("confirmation is required")
+	}
+	return nil
+}
+
+func decodeNetworkProfileArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		Profile   string `json:"profile"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		(arguments.Profile != "lan-only" && arguments.Profile != "sync-anywhere") {
+		return "", errors.New("invalid network profile arguments")
+	}
+	return arguments.Profile, nil
 }
 
 func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
@@ -177,6 +439,100 @@ func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
 		return "", errors.New("invalid card enrollment arguments")
 	}
 	return arguments.SourceID, nil
+}
+
+func decodeIDArguments(raw json.RawMessage, field string) (string, error) {
+	var arguments map[string]json.RawMessage
+	if err := decodeStrictMap(raw, &arguments); err != nil || len(arguments) != 1 {
+		return "", errors.New("invalid id arguments")
+	}
+	encoded, ok := arguments[field]
+	if !ok {
+		return "", errors.New("missing id")
+	}
+	var value string
+	if err := json.Unmarshal(encoded, &value); err != nil || !validIdentifier(value) {
+		return "", errors.New("invalid id")
+	}
+	return value, nil
+}
+
+func decodeNamedArguments(raw json.RawMessage, idField, nameField string, maxName int) (string, string, error) {
+	var arguments map[string]json.RawMessage
+	if err := decodeStrictMap(raw, &arguments); err != nil || len(arguments) != 2 {
+		return "", "", errors.New("invalid named arguments")
+	}
+	var id, name string
+	if encoded, ok := arguments[idField]; !ok || json.Unmarshal(encoded, &id) != nil || id == "" || len(id) > 256 {
+		return "", "", errors.New("invalid subject id")
+	}
+	if encoded, ok := arguments[nameField]; !ok || json.Unmarshal(encoded, &name) != nil || !validDisplayText(name, maxName) {
+		return "", "", errors.New("invalid display name")
+	}
+	return id, name, nil
+}
+
+func decodeResetArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		Action       string `json:"action"`
+		Confirmed    bool   `json:"confirmed"`
+		Confirmation string `json:"confirmation"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed {
+		return "", errors.New("reset confirmation is required")
+	}
+	want := map[string]string{
+		"index-only": "RESET INDEX", "full": "RESET SYNCTHING", "available-only": "RESET AVAILABLE STATE",
+	}[arguments.Action]
+	if want == "" || arguments.Confirmation != want {
+		return "", errors.New("reset confirmation phrase does not match")
+	}
+	return arguments.Action, nil
+}
+
+func decodeLogLevelArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		Level     string `json:"level"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		(arguments.Level != "normal" && arguments.Level != "debug") {
+		return "", errors.New("invalid log level")
+	}
+	return arguments.Level, nil
+}
+
+func decodeStrictMap(raw json.RawMessage, target *map[string]json.RawMessage) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(target); err != nil || *target == nil {
+		return errors.New("invalid object")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON")
+	}
+	return nil
+}
+
+func validDisplayText(value string, maximum int) bool {
+	if len(value) == 0 || len(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeRequest(payload json.RawMessage) (Request, error) {
@@ -229,12 +585,21 @@ func (status *Status) normalize() {
 	if status.Cards == nil {
 		status.Cards = []CardStatus{}
 	} else {
-		status.Cards = append([]CardStatus(nil), status.Cards...)
+		status.Cards = append([]CardStatus{}, status.Cards...)
 	}
 	if status.Folders == nil {
 		status.Folders = []FolderStatus{}
 	} else {
-		status.Folders = append([]FolderStatus(nil), status.Folders...)
+		status.Folders = append([]FolderStatus{}, status.Folders...)
+	}
+	if status.Peers != nil {
+		status.Peers = append([]PeerStatus(nil), status.Peers...)
+	}
+	if status.Recovery.RemovePaths != nil {
+		status.Recovery.RemovePaths = append([]string(nil), status.Recovery.RemovePaths...)
+	}
+	if status.Recovery.RetainedPaths != nil {
+		status.Recovery.RetainedPaths = append([]string(nil), status.Recovery.RetainedPaths...)
 	}
 	if status.Issues == nil {
 		status.Issues = []Issue{}
@@ -242,12 +607,21 @@ func (status *Status) normalize() {
 	if status.Capabilities == nil {
 		status.Capabilities = []string{}
 	}
+	if status.Network != nil {
+		status.Network.AllowedNetworks = append([]string(nil), status.Network.AllowedNetworks...)
+		if status.Network.AllowedNetworks == nil {
+			status.Network.AllowedNetworks = []string{}
+		}
+	}
 	for index := range status.Cards {
 		if status.Cards[index].Issues == nil {
 			status.Cards[index].Issues = []Issue{}
 		}
 	}
 	for index := range status.Folders {
+		if status.Folders[index].Conflicts != nil {
+			status.Folders[index].Conflicts = append([]string(nil), status.Folders[index].Conflicts...)
+		}
 		if status.Folders[index].PauseReasons == nil {
 			status.Folders[index].PauseReasons = []string{}
 		}
@@ -263,10 +637,45 @@ func (status Status) validate() error {
 		!oneOf(status.Recovery.State, "ready", "pending", "error") {
 		return errors.New("invalid controller state")
 	}
+	if status.Network != nil && !oneOf(status.Network.Profile, "lan-only", "sync-anywhere") {
+		return errors.New("invalid network profile")
+	}
+	if status.Gateway != nil {
+		if status.Gateway.TrustedBrowsers < 0 || status.Gateway.TrustedBrowsers > 32 ||
+			(status.Gateway.Open && (status.Gateway.URL == "" || status.Gateway.Fingerprint == "")) ||
+			(status.Gateway.Pairing && (!status.Gateway.Open || len(status.Gateway.PIN) != 4 ||
+				status.Gateway.QRURL == "" || status.Gateway.OfferExpires == "")) {
+			return errors.New("invalid gateway status")
+		}
+	}
+	if status.Transfer != nil && (status.Transfer.LocalBytes < 0 || status.Transfer.GlobalBytes < 0 ||
+		status.Transfer.NeedBytes < 0 || status.Transfer.InBytes < 0 || status.Transfer.OutBytes < 0) {
+		return errors.New("invalid transfer status")
+	}
+	if status.Logging != nil && !oneOf(status.Logging.Level, "normal", "debug") {
+		return errors.New("invalid logging status")
+	}
+	if status.Storage != nil {
+		if status.Storage.SnapshotBytes < 0 || status.Storage.VersionBytes < 0 || status.Storage.SnapshotCount < 0 ||
+			status.Storage.VersionGroups < 0 || len(status.Storage.Inventory) > 128 {
+			return errors.New("invalid storage status")
+		}
+		for _, row := range status.Storage.Inventory {
+			if row.CardSuffix == "" || row.Name == "" || row.Bytes < 0 ||
+				!oneOf(row.Category, "snapshot", "versions") || !oneOf(row.Kind, "saves", "states", "other") {
+				return errors.New("invalid storage inventory row")
+			}
+		}
+	}
+	if len(status.Recovery.RemovePaths) > 64 || len(status.Recovery.RetainedPaths) > 32 ||
+		(status.Recovery.PlanID != "" && (len(status.Recovery.PlanID) != 32 ||
+			!oneOf(status.Recovery.PlanAction, "index-only", "full", "available-only"))) {
+		return errors.New("invalid reset recovery status")
+	}
 	if status.Upstream.State == "running" && (status.Upstream.Version == "" || status.Upstream.DeviceID == "") {
 		return errors.New("incomplete running status")
 	}
-	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
+	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Peers) > 128 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
 		return errors.New("status exceeds row limits")
 	}
 	for _, card := range status.Cards {
@@ -277,8 +686,20 @@ func (status Status) validate() error {
 	}
 	for _, folder := range status.Folders {
 		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.PeerCount < 0 ||
-			len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
+			folder.ConflictCount < 0 || folder.ConflictCount < len(folder.Conflicts) ||
+			len(folder.Conflicts) > 64 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
 			return errors.New("folder status is outside protocol bounds")
+		}
+		for _, conflict := range folder.Conflicts {
+			if !validDisplayText(conflict, 256) {
+				return errors.New("folder conflict path is outside protocol bounds")
+			}
+		}
+	}
+	for _, peer := range status.Peers {
+		if peer.ID == "" || peer.Name == "" || !oneOf(peer.State, "offline", "connected", "paused", "pending") ||
+			!oneOf(peer.Connection, "none", "local", "direct", "relay") {
+			return errors.New("peer status is outside protocol bounds")
 		}
 	}
 	return nil

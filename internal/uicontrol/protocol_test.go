@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 5 {
-		t.Fatalf("checked %d fixtures, want 5", checked)
+	if checked != 9 {
+		t.Fatalf("checked %d fixtures, want 9", checked)
 	}
 }
 
@@ -84,6 +84,23 @@ func TestHandleRejectsProtocolDrift(t *testing.T) {
 		response := Handle([]byte(test.request), status)
 		if response.OK || response.Error == nil || response.Error.Code != test.code {
 			t.Fatalf("Handle(%s) = %+v, want %s", test.request, response, test.code)
+		}
+	}
+}
+
+func TestStatusKeepsRequiredEmptyCollectionsAsArrays(t *testing.T) {
+	status := fixtureStatus()
+	status.Cards = make([]CardStatus, 0)
+	status.Folders = make([]FolderStatus, 0)
+	status.Issues = make([]Issue, 0)
+	response := Handle([]byte(`{"v":1,"id":"empty","op":"status.get","args":{}}`), status)
+	payload, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"cards":[]`, `"folders":[]`, `"issues":[]`} {
+		if !bytes.Contains(payload, []byte(required)) {
+			t.Fatalf("required empty collection %s missing from %s", required, payload)
 		}
 	}
 }
@@ -159,6 +176,167 @@ func TestEnrollCardOperation(t *testing.T) {
 	response = operations.Handle([]byte(`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"../bad"}}`))
 	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 		t.Fatalf("unsafe source response = %+v", response)
+	}
+}
+
+func TestNetworkProfileOperationRequiresConfirmation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		SetNetworkProfile: func(profile string) (Status, *ProtocolError) {
+			called = profile
+			status := fixtureStatus()
+			status.Network = &NetworkStatus{Profile: profile, AllowedNetworks: []string{}}
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"sync-anywhere","confirmed":true}}`))
+	if !response.OK || called != "sync-anywhere" || response.Result == nil || response.Result.Network == nil {
+		t.Fatalf("network response = %+v, called=%q", response, called)
+	}
+	for _, request := range []string{
+		`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"sync-anywhere","confirmed":false}}`,
+		`{"v":1,"id":"network","op":"network.profile.set","args":{"profile":"private-addresses","confirmed":true}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe network response = %+v", response)
+		}
+	}
+}
+
+func TestGatewayOperationsSeparatePairingFromConfirmedActions(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		GatewayAction: func(operation string) (Status, *ProtocolError) {
+			called = operation
+			status := fixtureStatus()
+			status.Gateway = &GatewayStatus{Open: true, URL: "https://192.0.2.1:8384/", Fingerprint: "AA:BB"}
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.open","args":{}}`))
+	if !response.OK || called != OperationGatewayOpen {
+		t.Fatalf("gateway open = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.revoke-all","args":{"confirmed":false}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("unconfirmed revoke = %+v", response)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"gateway","op":"gateway.revoke-all","args":{"confirmed":true}}`))
+	if !response.OK || called != OperationGatewayRevoke {
+		t.Fatalf("confirmed revoke = %+v, called=%q", response, called)
+	}
+}
+
+func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
+	var operation, id, name string
+	operations := Operations{
+		Status: fixtureStatus,
+		FolderInspect: func(gotID string) (Status, *ProtocolError) {
+			operation, id = OperationFolderInspect, gotID
+			return fixtureStatus(), nil
+		},
+		FolderAction: func(gotOperation, gotID, gotName string) (Status, *ProtocolError) {
+			operation, id, name = gotOperation, gotID, gotName
+			return fixtureStatus(), nil
+		},
+		DeviceAction: func(gotOperation, gotID, gotName string) (Status, *ProtocolError) {
+			operation, id, name = gotOperation, gotID, gotName
+			return fixtureStatus(), nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"leaf-saves-0011223344556677","label":"My Saves"}}`))
+	if !response.OK || operation != OperationFolderRename || id != "leaf-saves-0011223344556677" || name != "My Saves" {
+		t.Fatalf("folder rename = %+v, %q %q %q", response, operation, id, name)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"inspect","op":"folder.inspect","args":{"folder_id":"leaf-saves-0011223344556677"}}`))
+	if !response.OK || operation != OperationFolderInspect || id != "leaf-saves-0011223344556677" {
+		t.Fatalf("folder inspect = %+v, %q %q", response, operation, id)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"device","op":"device.add","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}`))
+	if !response.OK || operation != OperationDeviceAdd || name != "Laptop" {
+		t.Fatalf("device add = %+v, %q %q", response, operation, name)
+	}
+	for _, request := range []string{
+		`{"v":1,"id":"folder","op":"folder.pause","args":{"folder_id":"../bad"}}`,
+		`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"valid","label":"bad\nname"}}`,
+		`{"v":1,"id":"device","op":"device.add","args":{"device_id":"id","name":"peer","extra":true}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe action accepted: %s = %+v", request, response)
+		}
+	}
+}
+
+func TestResetPreparationRequiresExactStrongConfirmation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		PrepareReset: func(action string) (Status, *ProtocolError) {
+			called = action
+			status := fixtureStatus()
+			status.Recovery.PlanID = "00112233445566778899aabbccddeeff"
+			status.Recovery.PlanAction = action
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"reset","op":"reset.prepare","args":{"action":"full","confirmed":true,"confirmation":"RESET SYNCTHING"}}`))
+	if !response.OK || called != "full" {
+		t.Fatalf("confirmed reset = %+v, called=%q", response, called)
+	}
+	for _, request := range []string{
+		`{"v":1,"id":"reset","op":"reset.prepare","args":{"action":"full","confirmed":false,"confirmation":"RESET SYNCTHING"}}`,
+		`{"v":1,"id":"reset","op":"reset.prepare","args":{"action":"full","confirmed":true,"confirmation":"reset syncthing"}}`,
+		`{"v":1,"id":"reset","op":"reset.prepare","args":{"action":"everything","confirmed":true,"confirmation":"RESET SYNCTHING"}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe reset accepted: %s = %+v", request, response)
+		}
+	}
+}
+
+func TestLoggingAndDiagnosticsOperationsAreStrict(t *testing.T) {
+	level := ""
+	exported := false
+	operations := Operations{
+		Status: fixtureStatus,
+		SetLogLevel: func(got string) (Status, *ProtocolError) {
+			level = got
+			status := fixtureStatus()
+			status.Logging = &LoggingStatus{Level: got}
+			return status, nil
+		},
+		ExportDiagnostics: func() (Status, *ProtocolError) {
+			exported = true
+			status := fixtureStatus()
+			status.Diagnostics = &DiagnosticsStatus{LastExportPath: "/logs/leaf-syncthing-diagnostics.json"}
+			return status, nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"log","op":"log.level.set","args":{"level":"debug","confirmed":true}}`))
+	if !response.OK || level != "debug" || response.Result == nil || response.Result.Logging == nil {
+		t.Fatalf("logging response = %+v, level=%q", response, level)
+	}
+	for _, request := range []string{
+		`{"v":1,"id":"log","op":"log.level.set","args":{"level":"debug","confirmed":false}}`,
+		`{"v":1,"id":"log","op":"log.level.set","args":{"level":"trace","confirmed":true}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe log request accepted: %s = %+v", request, response)
+		}
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"diagnostics","op":"diagnostics.export","args":{}}`))
+	if !response.OK || !exported || response.Result == nil || response.Result.Diagnostics == nil {
+		t.Fatalf("diagnostics response = %+v, exported=%v", response, exported)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"diagnostics","op":"diagnostics.export","args":{"path":"/tmp/out"}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("diagnostics accepted caller-selected path: %+v", response)
 	}
 }
 
