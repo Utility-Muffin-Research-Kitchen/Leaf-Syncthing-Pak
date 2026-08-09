@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Leaf Syncthing
+        uses: actions/checkout@v4
+        with:
+          path: Leaf-Syncthing-Pak
+
+      - name: Check out the pinned service contracts
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/umrk-workspace
+          ref: 5ab17d82c122b481f15c835e6ff9a21829d45aa9
+          path: umrk-workspace
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: Leaf-Syncthing-Pak/go.mod
+
+      - name: Test
+        run: go test ./...
+        working-directory: Leaf-Syncthing-Pak
