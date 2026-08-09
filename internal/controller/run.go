@@ -138,6 +138,21 @@ func (runner Runner) Run(ctx context.Context) error {
 		_ = shutdownUpstream(upstream)
 		return fmt.Errorf("verify cards: %w", err)
 	}
+	if hasPendingMembership(folderControls.Snapshot()) {
+		if b3Folders == nil {
+			_ = shutdownUpstream(upstream)
+			return errors.New("recover folder membership: upstream folder control is unavailable")
+		}
+		recoveryContext, recoveryCancel := context.WithTimeout(ctx, 15*time.Second)
+		session.Folders, err = recoverFolderMemberships(
+			recoveryContext, session.Folders, session.Identity.DeviceID, cardInventory, folderControls, b3Folders,
+		)
+		recoveryCancel()
+		if err != nil {
+			_ = shutdownUpstream(upstream)
+			return fmt.Errorf("recover folder membership: %w", err)
+		}
+	}
 	gameState := session.State
 	var status atomic.Value
 	initialStatus := controlStatus(session, gameState, cardInventory, folderControls.Snapshot())
@@ -178,7 +193,7 @@ func (runner Runner) Run(ctx context.Context) error {
 		initialStatus.Capabilities = append(initialStatus.Capabilities,
 			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOfferPlan, uicontrol.OperationFolderOnboardCreate,
 			uicontrol.OperationFolderFirstSyncPrepare, uicontrol.OperationFolderFirstSyncStart,
-			uicontrol.OperationFolderTypeSet)
+			uicontrol.OperationFolderTypeSet, uicontrol.OperationFolderShare, uicontrol.OperationFolderUnshare)
 	}
 	if !foreignConflict.Empty() {
 		initialStatus.Upstream.State = "conflict"
@@ -433,6 +448,73 @@ func (runner Runner) Run(ctx context.Context) error {
 				return uicontrol.Status{}, b3OperationError(typeErr)
 			}
 			session.Folders[folderIndex] = target
+			pauseSet := requiredOfflinePauseSet(session.Folders, inventory, folderControls.Snapshot())
+			if !pauseSet[folderID] {
+				if unpauseErr := b3Folders.SetFolderPaused(actionContext, folderID, false); unpauseErr != nil {
+					return uicontrol.Status{}, b3OperationError(unpauseErr)
+				}
+				session.Folders[folderIndex].Paused = false
+			}
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			status.Store(updated)
+			return refreshUIStatus(), nil
+		},
+		FolderMembership: func(operation, folderID, deviceID string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("folder sharing is unavailable"))
+			}
+			deviceID, normalizeErr := syncthingconfig.NormalizeDeviceID(deviceID)
+			if normalizeErr != nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("the selected peer identity is invalid"))
+			}
+			current := refreshUIStatus()
+			row, rowFound := findFolder(current, folderID)
+			peer, peerFound := findPeer(current, deviceID)
+			folder, folderIndex, configured := findConfiguredFolder(session.Folders, folderID)
+			if !rowFound || !configured || !folderSafeForAction(row) {
+				return uicontrol.Status{}, b3OperationError(errors.New("the folder safety checks must pass before changing sharing"))
+			}
+			if !peerFound || peer.Pending {
+				return uicontrol.Status{}, b3OperationError(errors.New("sharing requires an already configured peer"))
+			}
+			present := operation == uicontrol.OperationFolderShare
+			intent := "unshare"
+			if present {
+				intent = "share"
+			}
+			target, changed, membershipErr := folderWithMembership(folder, session.Identity.DeviceID, deviceID, present)
+			if membershipErr != nil {
+				return uicontrol.Status{}, b3OperationError(membershipErr)
+			}
+			record := folderControls.Snapshot()[folderID]
+			if !changed {
+				if record.PendingMembership == "" {
+					return current, nil
+				}
+				if record.PendingMembership != intent || record.PendingDeviceID != deviceID {
+					return uicontrol.Status{}, b3OperationError(errors.New("another folder membership change is pending"))
+				}
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			if intentErr := folderControls.BeginMembership(folderID, deviceID, intent); intentErr != nil {
+				return uicontrol.Status{}, b3OperationError(intentErr)
+			}
+			pending := applyInventory(current, inventory, session.Folders, folderControls.Snapshot())
+			pending = applyFirstSyncStatus(pending, session.FirstSync, folderControls)
+			status.Store(pending)
+			actionContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if membershipErr := b3Folders.SetManagedFolderDevices(actionContext, target); membershipErr != nil {
+				return uicontrol.Status{}, b3OperationError(membershipErr)
+			}
+			session.Folders[folderIndex] = target
+			if intentErr := folderControls.CompleteMembership(folderID); intentErr != nil {
+				return uicontrol.Status{}, b3OperationError(intentErr)
+			}
 			pauseSet := requiredOfflinePauseSet(session.Folders, inventory, folderControls.Snapshot())
 			if !pauseSet[folderID] {
 				if unpauseErr := b3Folders.SetFolderPaused(actionContext, folderID, false); unpauseErr != nil {

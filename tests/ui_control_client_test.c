@@ -65,6 +65,7 @@ int main(void) {
             "\"card_id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"saves\",\"path\":\"/mnt/sdcard/Saves\","
             "\"type\":\"sendreceive\",\"state\":\"idle\",\"paused\":false,\"pause_reasons\":[],"
             "\"pending_rescan\":false,\"local_bytes\":10,\"global_bytes\":10,\"local_items\":3,\"global_items\":4,\"peer_count\":1,"
+            "\"device_ids\":[\"LOCAL\",\"PEER\"],"
             "\"last_sync\":\"2026-08-08T12:00:00Z\",\"versioning\":\"simple\",\"conflict_count\":1,"
             "\"first_sync_state\":\"ready\",\"snapshot_name\":\"first-sync-20260808T120000Z\","
             "\"snapshot_files\":3,\"snapshot_directories\":2,\"snapshot_bytes\":4096,"
@@ -135,6 +136,8 @@ int main(void) {
     assert(status.onboarding.file_count == 3 && status.onboarding.available_bytes == 8192);
     assert(status.folder_count == 1 && status.folders[0].local_items == 3 &&
            status.folders[0].global_items == 4);
+    assert(status.folders[0].device_count == 2 &&
+           strcmp(status.folders[0].device_ids[1], "PEER") == 0);
     assert(strcmp(status.folders[0].first_sync_state, "ready") == 0 &&
            status.folders[0].snapshot_files == 3 && status.folders[0].snapshot_bytes == 4096);
     puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");

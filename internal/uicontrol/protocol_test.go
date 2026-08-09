@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 15 {
-		t.Fatalf("checked %d fixtures, want 15", checked)
+	if checked != 17 {
+		t.Fatalf("checked %d fixtures, want 17", checked)
 	}
 }
 
@@ -242,6 +242,10 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 			operation, id, name = gotOperation, gotID, gotName
 			return fixtureStatus(), nil
 		},
+		FolderMembership: func(gotOperation, gotID, gotDeviceID string) (Status, *ProtocolError) {
+			operation, id, name = gotOperation, gotID, gotDeviceID
+			return fixtureStatus(), nil
+		},
 		DeviceAction: func(gotOperation, gotID, gotName string) (Status, *ProtocolError) {
 			operation, id, name = gotOperation, gotID, gotName
 			return fixtureStatus(), nil
@@ -255,6 +259,11 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 	if !response.OK || operation != OperationFolderInspect || id != "leaf-saves-0011223344556677" {
 		t.Fatalf("folder inspect = %+v, %q %q", response, operation, id)
 	}
+	peerID := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	response = operations.Handle([]byte(`{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"` + peerID + `","confirmed":true}}`))
+	if !response.OK || operation != OperationFolderShare || id != "leaf-saves-0011223344556677" || name != peerID {
+		t.Fatalf("folder share = %+v, %q %q %q", response, operation, id, name)
+	}
 	response = operations.Handle([]byte(`{"v":1,"id":"device","op":"device.add","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}`))
 	if !response.OK || operation != OperationDeviceAdd || name != "Laptop" {
 		t.Fatalf("device add = %+v, %q %q", response, operation, name)
@@ -262,6 +271,8 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 	for _, request := range []string{
 		`{"v":1,"id":"folder","op":"folder.pause","args":{"folder_id":"../bad"}}`,
 		`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"valid","label":"bad\nname"}}`,
+		`{"v":1,"id":"folder","op":"folder.unshare","args":{"folder_id":"valid","device_id":"peer","confirmed":false}}`,
+		`{"v":1,"id":"folder","op":"folder.share","args":{"folder_id":"valid","device_id":"peer","confirmed":true,"extra":true}}`,
 		`{"v":1,"id":"device","op":"device.add","args":{"device_id":"id","name":"peer","extra":true}}`,
 	} {
 		response = operations.Handle([]byte(request))

@@ -31,6 +31,7 @@ type managedFolderUpstream interface {
 type b3FolderUpstream interface {
 	managedFolderUpstream
 	SetManagedFolderType(context.Context, syncthing.ConfiguredFolder) error
+	SetManagedFolderDevices(context.Context, syncthing.ConfiguredFolder) error
 	SetFolderPaused(context.Context, string, bool) error
 	RescanFolder(context.Context, string) error
 }

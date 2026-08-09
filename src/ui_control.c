@@ -397,6 +397,13 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(item, "pending_rescan");
         if (!cJSON_IsBool(value)) return -1;
         folder->pending_rescan = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(item, "device_ids");
+        if (!cJSON_IsArray(value) || cJSON_GetArraySize(value) > LS_UI_MAX_FOLDER_DEVICES) return -1;
+        folder->device_count = cJSON_GetArraySize(value);
+        for (int device_index = 0; device_index < folder->device_count; device_index++) {
+            if (ls_copy_json(folder->device_ids[device_index], sizeof(folder->device_ids[device_index]),
+                             cJSON_GetArrayItem(value, device_index)) != 0) return -1;
+        }
         value = cJSON_GetObjectItemCaseSensitive(item, "local_bytes");
         if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
         folder->local_bytes = (long long)value->valuedouble;
@@ -719,6 +726,22 @@ int ls_ui_folder_type_set(const char *socket_path, const char *folder_id,
 invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create folder direction request");
+    return -1;
+}
+
+int ls_ui_folder_membership(const char *socket_path, const char *operation,
+                            const char *folder_id, const char *device_id,
+                            ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !operation || !folder_id || !device_id ||
+        (strcmp(operation, "folder.share") != 0 && strcmp(operation, "folder.unshare") != 0) ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder sharing request");
     return -1;
 }
 

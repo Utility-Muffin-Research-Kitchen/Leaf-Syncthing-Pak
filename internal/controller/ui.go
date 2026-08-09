@@ -97,6 +97,15 @@ func findFolderOffer(status uicontrol.Status, folderID, deviceID string) (uicont
 	return uicontrol.FolderOfferStatus{}, false
 }
 
+func findPeer(status uicontrol.Status, deviceID string) (uicontrol.PeerStatus, bool) {
+	for _, peer := range status.Peers {
+		if peer.ID == deviceID {
+			return peer, true
+		}
+	}
+	return uicontrol.PeerStatus{}, false
+}
+
 func folderSafeForAction(folder *uicontrol.FolderStatus) bool {
 	if folder == nil || folder.CardID == "" {
 		return false

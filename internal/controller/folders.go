@@ -31,11 +31,15 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		if control.FirstSync {
 			reasons = append(reasons, "first-sync")
 		}
+		if control.PendingMembership != "" {
+			reasons = append(reasons, "membership")
+		}
 		row := uicontrol.FolderStatus{
 			ID: folder.ID, Label: folder.Label, Kind: folder.Kind, Path: folder.Path,
 			Type: folder.Type, State: "idle",
 			PauseReasons: reasons, PendingRescan: control.PendingRescan, Versioning: folder.VersioningType,
 			Issues: []uicontrol.Issue{}, PeerCount: remotePeerCount(folder.Devices),
+			DeviceIDs: append([]string(nil), folder.Devices...),
 		}
 		if row.Label == "" {
 			row.Label = "Leaf " + folderKindLabel(folder.Kind)

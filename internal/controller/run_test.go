@@ -49,6 +49,11 @@ func (upstream *fakeB3Upstream) ReadUIStatus(_ context.Context, folders []syncth
 		Folders:      make(map[string]syncthingconfig.UIFolderStatus),
 		FolderOffers: append([]syncthingconfig.UIFolderOffer(nil), upstream.offers...),
 	}
+	for index, deviceID := range upstream.devices[1:] {
+		status.Peers = append(status.Peers, syncthingconfig.UIPeerStatus{
+			ID: deviceID, Name: fmt.Sprintf("Peer %d", index+1), State: "offline", Connection: "none",
+		})
+	}
 	for _, folder := range folders {
 		state := "idle"
 		if upstream.paused[folder.ID] {
@@ -103,6 +108,12 @@ func (upstream *fakeB3Upstream) AddManagedFolder(_ context.Context, folder synct
 }
 
 func (upstream *fakeB3Upstream) SetManagedFolderType(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
+	upstream.folders[folder.ID] = folder
+	upstream.paused[folder.ID] = true
+	return nil
+}
+
+func (upstream *fakeB3Upstream) SetManagedFolderDevices(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
 	upstream.folders[folder.ID] = folder
 	upstream.paused[folder.ID] = true
 	return nil
@@ -388,6 +399,31 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
 	if !start.OK || start.Result == nil || start.Result.Folders[0].FirstSyncState != "complete" || start.Result.Folders[0].Paused {
 		t.Fatalf("first-sync start = %+v", start)
+	}
+	share := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"%s","device_id":"%s","confirmed":true}}`, folderID, onboardingOtherPeer))
+	if !share.OK || share.Result == nil || len(share.Result.Folders[0].DeviceIDs) != 3 || share.Result.Folders[0].Paused {
+		t.Fatalf("folder share = %+v", share)
+	}
+	unshare := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"unshare","op":"folder.unshare","args":{"folder_id":"%s","device_id":"%s","confirmed":true}}`, folderID, onboardingPeer))
+	if !unshare.OK || unshare.Result == nil || len(unshare.Result.Folders[0].DeviceIDs) != 2 ||
+		unshare.Result.Folders[0].DeviceIDs[1] != onboardingOtherPeer || unshare.Result.Folders[0].Paused {
+		t.Fatalf("folder unshare = %+v", unshare)
+	}
+	localOnly := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"unshare-final","op":"folder.unshare","args":{"folder_id":"%s","device_id":"%s","confirmed":true}}`, folderID, onboardingOtherPeer))
+	if !localOnly.OK || localOnly.Result == nil || len(localOnly.Result.Folders[0].DeviceIDs) != 1 ||
+		localOnly.Result.Folders[0].DeviceIDs[0] != onboardingSelf || localOnly.Result.Folders[0].PeerCount != 0 ||
+		localOnly.Result.Folders[0].Paused {
+		t.Fatalf("folder final unshare = %+v", localOnly)
+	}
+	records, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := records[folderID]; record.PendingMembership != "" || record.PendingDeviceID != "" {
+		t.Fatalf("completed folder membership intent = %+v", record)
 	}
 
 	toSendOnly := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(

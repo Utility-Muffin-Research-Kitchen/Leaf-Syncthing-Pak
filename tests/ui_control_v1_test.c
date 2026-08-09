@@ -70,6 +70,8 @@ int main(void) {
     round_trip("folder-first-sync-prepare-request.json", "\"snapshot_limit_acknowledged\":true");
     round_trip("folder-first-sync-start-request.json", "\"hub_versioning_acknowledged\":true");
     round_trip("folder-type-set-request.json", "\"op\":\"folder.type.set\"");
-    puts("PASS ui-control-v1 C fixture round trip (15 fixtures)");
+    round_trip("folder-share-request.json", "\"op\":\"folder.share\"");
+    round_trip("folder-unshare-request.json", "\"op\":\"folder.unshare\"");
+    puts("PASS ui-control-v1 C fixture round trip (17 fixtures)");
     return 0;
 }

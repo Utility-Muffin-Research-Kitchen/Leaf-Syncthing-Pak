@@ -30,6 +30,8 @@ const (
 	OperationFolderFirstSyncPrepare = "folder.first-sync.prepare"
 	OperationFolderFirstSyncStart   = "folder.first-sync.start"
 	OperationFolderTypeSet          = "folder.type.set"
+	OperationFolderShare            = "folder.share"
+	OperationFolderUnshare          = "folder.unshare"
 	OperationDeviceAdd              = "device.add"
 	OperationDeviceRename           = "device.rename"
 	OperationResetPrepare           = "reset.prepare"
@@ -204,6 +206,7 @@ type FolderStatus struct {
 	LocalItems          int      `json:"local_items,omitempty"`
 	GlobalItems         int      `json:"global_items,omitempty"`
 	PeerCount           int      `json:"peer_count"`
+	DeviceIDs           []string `json:"device_ids"`
 	LastSync            string   `json:"last_sync"`
 	Versioning          string   `json:"versioning"`
 	FirstSyncState      string   `json:"first_sync_state,omitempty"`
@@ -261,6 +264,7 @@ type Operations struct {
 	PrepareFirstSync  func(string) (Status, *ProtocolError)
 	StartFirstSync    func(string, bool) (Status, *ProtocolError)
 	SetFolderType     func(string, string) (Status, *ProtocolError)
+	FolderMembership  func(string, string, string) (Status, *ProtocolError)
 	DeviceAction      func(string, string, string) (Status, *ProtocolError)
 	PrepareReset      func(string) (Status, *ProtocolError)
 	SetLogLevel       func(string) (Status, *ProtocolError)
@@ -411,6 +415,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		}
 		var operationError *ProtocolError
 		status, operationError = operations.PlanFolderOffer(folderID, deviceID, sourceID, kind, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderShare, OperationFolderUnshare:
+		if operations.FolderMembership == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, err := decodeFolderMembershipArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder membership requires a valid folder, configured peer, and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderMembership(request.Operation, folderID, deviceID)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
@@ -620,6 +637,24 @@ func decodeFolderOfferPlanArguments(raw json.RawMessage) (string, string, string
 		return "", "", "", "", "", errors.New("invalid folder offer plan arguments")
 	}
 	return arguments.FolderID, arguments.DeviceID, arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+}
+
+func decodeFolderMembershipArguments(raw json.RawMessage) (string, string, error) {
+	var arguments struct {
+		FolderID  string `json:"folder_id"`
+		DeviceID  string `json:"device_id"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		!validIdentifier(arguments.FolderID) || !validIdentifier(arguments.DeviceID) {
+		return "", "", errors.New("invalid folder membership arguments")
+	}
+	return arguments.FolderID, arguments.DeviceID, nil
 }
 
 func decodeOnboardingCreateArguments(raw json.RawMessage) (string, bool, bool, error) {
@@ -876,6 +911,11 @@ func (status *Status) normalize() {
 		}
 	}
 	for index := range status.Folders {
+		if status.Folders[index].DeviceIDs == nil {
+			status.Folders[index].DeviceIDs = []string{}
+		} else {
+			status.Folders[index].DeviceIDs = append([]string(nil), status.Folders[index].DeviceIDs...)
+		}
 		if status.Folders[index].Conflicts != nil {
 			status.Folders[index].Conflicts = append([]string(nil), status.Folders[index].Conflicts...)
 		}
@@ -957,8 +997,13 @@ func (status Status) validate() error {
 		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 || folder.PeerCount < 0 ||
 			folder.SnapshotFiles < 0 || folder.SnapshotDirectories < 0 || folder.SnapshotBytes < 0 ||
 			folder.ConflictCount < 0 || folder.ConflictCount < len(folder.Conflicts) ||
-			len(folder.Conflicts) > 64 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
+			len(folder.Conflicts) > 64 || len(folder.DeviceIDs) > 33 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
 			return errors.New("folder status is outside protocol bounds")
+		}
+		for _, deviceID := range folder.DeviceIDs {
+			if !validIdentifier(deviceID) {
+				return errors.New("folder device membership is outside protocol bounds")
+			}
 		}
 		if folder.FirstSyncState != "" && !oneOf(folder.FirstSyncState, "required", "preparing", "ready", "complete", "error") {
 			return errors.New("folder first-sync state is outside protocol bounds")

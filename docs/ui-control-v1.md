@@ -86,8 +86,9 @@ capabilities[]                     supported operation names
 Card rows freeze physical identity, current slot/root, state (`absent`,
 `unenrolled`, `enrolled`, `invalid`, or `duplicate`), presence, writability,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
-identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
-versioning, an optional bounded conflict list, and scoped issues. Peer rows
+identity, card/kind/path/type, pause state and reasons, sizes, peer count, exact
+`device_ids` membership, last sync, versioning, an optional bounded conflict
+list, and scoped issues. Peer rows
 distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
 explicit and are never accepted by a status read. Folder-offer rows include
 the network folder ID and label, offering device ID/name, offer time, and
@@ -200,6 +201,25 @@ The controller checks that every selected ID is a unique configured peer both
 when it creates the review and when it consumes the plan. Peers added after the
 review are not silently included. The foreground UI presents the configured
 peers as an Include/Exclude checklist before requesting the review.
+
+## Folder sharing
+
+An existing managed folder is shared or unshared with exactly one already
+configured peer at a time:
+
+```json
+{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+{"v":1,"id":"unshare","op":"folder.unshare","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+```
+
+The foreground Sharing screen derives its checklist from the exact
+`folders[].device_ids` list; adding a device never shares existing folders
+automatically. The controller durably records the requested pair, pauses the
+folder, patches and re-reads upstream configuration, clears the intent, and
+then restores the safety-derived pause state. Startup completes an interrupted
+intent before normal mutations become available. Unsharing the final remote
+peer leaves the local managed folder and live files intact so it can be shared
+again later.
 
 ## Folder-offer planning
 

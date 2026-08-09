@@ -18,14 +18,16 @@ import (
 const folderControlStateName = "folder-control.json"
 
 type folderControlRecord struct {
-	CardID         string `json:"card_id"`
-	Kind           string `json:"kind"`
-	MarkerName     string `json:"marker_name"`
-	Manual         bool   `json:"manual"`
-	FirstSync      bool   `json:"first_sync"`
-	FirstSyncEpoch uint64 `json:"first_sync_epoch"`
-	PendingRescan  bool   `json:"pending_rescan"`
-	PendingAdd     bool   `json:"pending_add,omitempty"`
+	CardID            string `json:"card_id"`
+	Kind              string `json:"kind"`
+	MarkerName        string `json:"marker_name"`
+	Manual            bool   `json:"manual"`
+	FirstSync         bool   `json:"first_sync"`
+	FirstSyncEpoch    uint64 `json:"first_sync_epoch"`
+	PendingRescan     bool   `json:"pending_rescan"`
+	PendingAdd        bool   `json:"pending_add,omitempty"`
+	PendingMembership string `json:"pending_membership,omitempty"`
+	PendingDeviceID   string `json:"pending_device_id,omitempty"`
 }
 
 type folderControlDocument struct {
@@ -237,6 +239,53 @@ func (store *folderControlStore) Remove(folderID string) error {
 	return nil
 }
 
+func (store *folderControlStore) BeginMembership(folderID, deviceID, operation string) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil || (operation != "share" && operation != "unshare") {
+		return errors.New("folder membership intent is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingAdd {
+		return errors.New("folder control state cannot change membership for this folder")
+	}
+	if record.PendingMembership != "" {
+		if record.PendingMembership == operation && record.PendingDeviceID == deviceID {
+			return nil
+		}
+		return errors.New("another folder membership change is pending")
+	}
+	record.PendingMembership = operation
+	record.PendingDeviceID = deviceID
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingMembership = ""
+		record.PendingDeviceID = ""
+		store.records[folderID] = record
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) CompleteMembership(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingMembership == "" {
+		return errors.New("folder membership intent is absent")
+	}
+	original := record
+	record.PendingMembership = ""
+	record.PendingDeviceID = ""
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		store.records[folderID] = original
+		return err
+	}
+	return nil
+}
+
 func readFolderControlState(path string) (map[string]folderControlRecord, int, bool, error) {
 	records := make(map[string]folderControlRecord)
 	info, err := os.Lstat(path)
@@ -368,6 +417,16 @@ func validateFolderControlRecords(records map[string]folderControlRecord) error 
 		_, markerName, err := cards.BindingNames(record.CardID, record.Kind)
 		if err != nil || markerName != record.MarkerName {
 			return errors.New("folder control state contains an invalid physical binding")
+		}
+		if record.PendingAdd && record.PendingMembership != "" ||
+			(record.PendingMembership == "") != (record.PendingDeviceID == "") ||
+			(record.PendingMembership != "" && record.PendingMembership != "share" && record.PendingMembership != "unshare") {
+			return errors.New("folder control state contains an invalid pending mutation")
+		}
+		if record.PendingDeviceID != "" {
+			if _, err := syncthing.NormalizeDeviceID(record.PendingDeviceID); err != nil {
+				return errors.New("folder control state contains an invalid pending device")
+			}
 		}
 		localKey := record.CardID + ":" + record.Kind
 		if localBindings[localKey] {

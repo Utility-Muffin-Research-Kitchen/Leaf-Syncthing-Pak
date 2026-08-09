@@ -922,11 +922,85 @@ static void ls_show_folder_conflicts(ls_app *app, const ls_ui_folder *folder) {
     }
 }
 
+static int ls_folder_has_device(const ls_ui_folder *folder, const char *device_id) {
+    int index;
+    if (!folder || !device_id) return 0;
+    for (index = 0; index < folder->device_count; index++) {
+        if (strcmp(folder->device_ids[index], device_id) == 0) return 1;
+    }
+    return 0;
+}
+
+static void ls_show_folder_sharing(ls_app *app, const char *folder_id) {
+    int focus = 0;
+    for (;;) {
+        cat_options_item items[LS_UI_MAX_PEERS];
+        cat_option values[LS_UI_MAX_PEERS];
+        char value_text[LS_UI_MAX_PEERS][32];
+        int peer_indexes[LS_UI_MAX_PEERS];
+        cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
+                                    {.button = CAT_BTN_A, .label = "Change", .is_confirm = true}};
+        cat_options_list_opts options = {0};
+        cat_options_list_result result = {0};
+        ls_ui_folder *folder;
+        int index;
+        int count = 0;
+        int action;
+        ls_refresh(app);
+        folder = ls_find_folder(app, folder_id);
+        if (!app->controller_available || !folder) {
+            ls_message(app->error[0] ? app->error : "The folder is no longer available.");
+            return;
+        }
+        memset(items, 0, sizeof(items));
+        memset(values, 0, sizeof(values));
+        for (index = 0; index < app->status.peer_count; index++) {
+            ls_ui_peer *peer = &app->status.peers[index];
+            int shared;
+            if (peer->pending || !peer->id[0]) continue;
+            shared = ls_folder_has_device(folder, peer->id);
+            snprintf(value_text[count], sizeof(value_text[count]), "%s", shared ? "Shared" : "Not shared");
+            values[count] = (cat_option){.label = value_text[count], .value = value_text[count]};
+            items[count] = (cat_options_item){.label = peer->name, .type = CAT_OPT_CLICKABLE,
+                                               .options = &values[count], .option_count = 1};
+            peer_indexes[count++] = index;
+        }
+        if (count == 0) {
+            ls_message("Add or accept a Syncthing device before changing folder sharing.");
+            return;
+        }
+        options.title = "Share Folder";
+        options.items = items;
+        options.item_count = count;
+        options.footer = footer;
+        options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+        options.initial_selected_index = focus < count ? focus : 0;
+        options.help_text = "Choose a device to share or unshare only this folder. Other folders and devices are unchanged.";
+        action = cat_options_list(&options, &result);
+        focus = result.focused_index;
+        if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
+        if (result.action == CAT_ACTION_SELECTED && focus >= 0 && focus < count) {
+            ls_ui_peer *peer = &app->status.peers[peer_indexes[focus]];
+            int shared = ls_folder_has_device(folder, peer->id);
+            char message[320];
+            snprintf(message, sizeof(message), "%s %s with %s? This changes only this folder and keeps its local files.",
+                     shared ? "Stop sharing" : "Share", folder->label, peer->name);
+            if (ls_confirm(message, shared ? "Unshare" : "Share") &&
+                ls_ui_folder_membership(app->control_socket,
+                                        shared ? "folder.unshare" : "folder.share",
+                                        folder->id, peer->id, &app->status,
+                                        app->error, sizeof(app->error)) != 0)
+                ls_message(app->error);
+        }
+    }
+}
+
 static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
     enum {
         LS_FOLDER_DETAILS,
         LS_FOLDER_FIRST_SYNC,
         LS_FOLDER_TYPE,
+        LS_FOLDER_SHARING,
         LS_FOLDER_PAUSE,
         LS_FOLDER_RESCAN,
         LS_FOLDER_RENAME,
@@ -936,9 +1010,9 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
     int focus = 0;
     int inspected = 0;
     for (;;) {
-        cat_options_item items[8];
-        cat_option values[5];
-        int commands[8];
+        cat_options_item items[9];
+        cat_option values[6];
+        int commands[9];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
@@ -983,6 +1057,7 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
             snprintf(first_sync_value, sizeof(first_sync_value), "%s",
                      folder->first_sync_state[0] ? folder->first_sync_state : "not required");
             values[4] = (cat_option){.label = first_sync_value, .value = first_sync_value};
+            values[5] = (cat_option){.label = "Choose devices", .value = "Choose devices"};
         }
         commands[item_count] = LS_FOLDER_DETAILS;
         items[item_count++] = (cat_options_item){.label = "Details", .type = CAT_OPT_CLICKABLE,
@@ -996,6 +1071,12 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
         if (ls_ui_has_capability(&app->status, "folder.type.set")) {
             commands[item_count] = LS_FOLDER_TYPE;
             items[item_count++] = (cat_options_item){.label = "Change sync direction", .type = CAT_OPT_CLICKABLE};
+        }
+        if (ls_ui_has_capability(&app->status, "folder.share") &&
+            ls_ui_has_capability(&app->status, "folder.unshare")) {
+            commands[item_count] = LS_FOLDER_SHARING;
+            items[item_count++] = (cat_options_item){.label = "Sharing", .type = CAT_OPT_CLICKABLE,
+                                                      .options = &values[5], .option_count = 1};
         }
         commands[item_count] = LS_FOLDER_PAUSE;
         items[item_count++] = (cat_options_item){.label = folder->paused ? "Resume" : "Pause",
@@ -1058,6 +1139,8 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
                     }
                 }
             }
+        } else if (command == LS_FOLDER_SHARING) {
+            ls_show_folder_sharing(app, folder->id);
         } else if (command == LS_FOLDER_PAUSE) {
             const char *operation = folder->paused ? "folder.resume" : "folder.pause";
             const char *message = folder->paused

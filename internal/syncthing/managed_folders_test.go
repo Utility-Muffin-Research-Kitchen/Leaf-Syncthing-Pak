@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	managedSelf = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
-	managedPeer = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	managedSelf      = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+	managedPeer      = "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	managedOtherPeer = "CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ"
 )
 
 func TestConfiguredFolderDevicesRequiresSelfAndRemotePeer(t *testing.T) {
@@ -43,8 +44,15 @@ func TestManagedFolderMutationsArePausedBoundedAndVersioned(t *testing.T) {
 	}
 	requests := []capturedRequest{}
 	transport := uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		payload, _ := io.ReadAll(request.Body)
+		var payload []byte
+		if request.Body != nil {
+			payload, _ = io.ReadAll(request.Body)
+		}
 		requests = append(requests, capturedRequest{method: request.Method, path: request.URL.Path, body: payload})
+		if request.Method == http.MethodGet {
+			body := `{"paused":true,"devices":[{"deviceID":"` + managedOtherPeer + `"},{"deviceID":"` + managedSelf + `"},{"deviceID":"` + managedPeer + `"}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		}
 		return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
 	})
 	process := &Process{client: &http.Client{Transport: transport}, apiKey: "secret"}
@@ -62,8 +70,13 @@ func TestManagedFolderMutationsArePausedBoundedAndVersioned(t *testing.T) {
 	if err := process.SetManagedFolderType(context.Background(), folder); err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || requests[0].method != http.MethodPost || requests[0].path != "/rest/config/folders" ||
-		requests[1].method != http.MethodPatch || requests[1].path != "/rest/config/folders/retro-saves" {
+	folder.Devices = append(folder.Devices, managedOtherPeer)
+	if err := process.SetManagedFolderDevices(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 || requests[0].method != http.MethodPost || requests[0].path != "/rest/config/folders" ||
+		requests[1].method != http.MethodPatch || requests[1].path != "/rest/config/folders/retro-saves" ||
+		requests[2].method != http.MethodPatch || requests[3].method != http.MethodGet {
 		t.Fatalf("requests = %+v", requests)
 	}
 	var create managedFolderRequest
@@ -81,6 +94,42 @@ func TestManagedFolderMutationsArePausedBoundedAndVersioned(t *testing.T) {
 	}
 	if string(patch["paused"]) != "true" || string(patch["type"]) != `"receiveonly"` || patch["versioning"] == nil {
 		t.Fatalf("type patch = %s", requests[1].body)
+	}
+	if err := json.Unmarshal(requests[2].body, &patch); err != nil {
+		t.Fatal(err)
+	}
+	if string(patch["paused"]) != "true" || patch["devices"] == nil {
+		t.Fatalf("membership patch = %s", requests[2].body)
+	}
+}
+
+func TestSetManagedFolderDevicesAllowsVerifiedLocalOnlyFolder(t *testing.T) {
+	calls := 0
+	process := &Process{client: &http.Client{Transport: uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method == http.MethodGet {
+			body := `{"paused":true,"devices":[{"deviceID":"` + managedSelf + `"}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+	})}, apiKey: "secret"}
+	root := t.TempDir()
+	folder := ConfiguredFolder{
+		ID: "retro-saves", Label: "Leaf Saves", Kind: "saves",
+		Path: filepath.Join(root, "Saves"), Type: "sendonly", MarkerName: ".leaf-saves-001122334455",
+		Devices: []string{managedSelf},
+	}
+	if err := process.SetManagedFolderDevices(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("membership calls = %d, want patch and verification", calls)
+	}
+	if sameManagedFolderDevices(
+		[]managedFolderDevice{{DeviceID: managedSelf}, {DeviceID: managedSelf}},
+		[]managedFolderDevice{{DeviceID: managedSelf}, {DeviceID: managedPeer}},
+	) {
+		t.Fatal("duplicate upstream membership passed exact validation")
 	}
 }
 

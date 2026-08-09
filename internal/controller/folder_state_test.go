@@ -37,13 +37,23 @@ func TestFolderControlStatePersistsManualAndPendingReasons(t *testing.T) {
 	if err := store.RequireFirstSync(folder.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.BeginMembership(folder.ID, onboardingPeer, "share"); err != nil {
+		t.Fatal(err)
+	}
 	reloaded, err := newFolderControlStore(path, []syncthing.ConfiguredFolder{folder}, []cards.Card{card})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := reloaded.Snapshot()[folder.ID]
-	if !got.FirstSync || got.FirstSyncEpoch != 2 || !got.Manual || !got.PendingRescan {
+	if !got.FirstSync || got.FirstSyncEpoch != 2 || !got.Manual || !got.PendingRescan ||
+		got.PendingMembership != "share" || got.PendingDeviceID != onboardingPeer {
 		t.Fatalf("reloaded state = %+v", got)
+	}
+	if err := reloaded.CompleteMembership(folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if record := reloaded.Snapshot()[folder.ID]; record.PendingMembership != "" || record.PendingDeviceID != "" {
+		t.Fatalf("completed membership state = %+v", record)
 	}
 
 	info, err := os.Lstat(path)
