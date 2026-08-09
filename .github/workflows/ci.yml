@@ -30,6 +30,9 @@ jobs:
         with:
           go-version-file: Leaf-Syncthing-Pak/go.mod
 
+      - name: Install native test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
       - name: Test
         run: go test ./...
         working-directory: Leaf-Syncthing-Pak
