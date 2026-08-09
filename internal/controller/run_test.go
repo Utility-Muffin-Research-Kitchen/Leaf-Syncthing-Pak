@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,6 +21,80 @@ import (
 type fakeUpstream struct {
 	done         chan error
 	shutdownCall bool
+}
+
+type fakeB3Upstream struct {
+	*fakeUpstream
+	devices     []string
+	folders     map[string]syncthingconfig.ConfiguredFolder
+	paused      map[string]bool
+	pauseCalls  []bool
+	rescanCalls int
+}
+
+func newFakeB3Upstream() *fakeB3Upstream {
+	return &fakeB3Upstream{
+		fakeUpstream: &fakeUpstream{done: make(chan error)},
+		devices: []string{
+			"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH",
+			"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP",
+		},
+		folders: make(map[string]syncthingconfig.ConfiguredFolder), paused: make(map[string]bool),
+	}
+}
+
+func (upstream *fakeB3Upstream) ReadUIStatus(_ context.Context, folders []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.UIStatus, error) {
+	status := syncthingconfig.UIStatus{Folders: make(map[string]syncthingconfig.UIFolderStatus)}
+	for _, folder := range folders {
+		state := "idle"
+		if upstream.paused[folder.ID] {
+			state = "paused"
+		}
+		status.Folders[folder.ID] = syncthingconfig.UIFolderStatus{
+			ID: folder.ID, State: state, LocalBytes: 9, GlobalBytes: 11, LocalItems: 1, GlobalItems: 2,
+		}
+	}
+	return status, nil
+}
+
+func (upstream *fakeB3Upstream) SetFolderPaused(_ context.Context, folderID string, paused bool) error {
+	upstream.paused[folderID] = paused
+	upstream.pauseCalls = append(upstream.pauseCalls, paused)
+	return nil
+}
+
+func (upstream *fakeB3Upstream) RescanFolder(context.Context, string) error {
+	upstream.rescanCalls++
+	return nil
+}
+
+func (upstream *fakeB3Upstream) RenameFolder(_ context.Context, folderID, label string) error {
+	folder := upstream.folders[folderID]
+	folder.Label = label
+	upstream.folders[folderID] = folder
+	return nil
+}
+
+func (upstream *fakeB3Upstream) AddPeer(context.Context, string, string, []string) error {
+	return nil
+}
+
+func (upstream *fakeB3Upstream) RenamePeer(context.Context, string, string) error { return nil }
+
+func (upstream *fakeB3Upstream) ConfiguredFolderDevices(context.Context, string) ([]string, error) {
+	return append([]string(nil), upstream.devices...), nil
+}
+
+func (upstream *fakeB3Upstream) AddManagedFolder(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
+	upstream.folders[folder.ID] = folder
+	upstream.paused[folder.ID] = true
+	return nil
+}
+
+func (upstream *fakeB3Upstream) SetManagedFolderType(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
+	upstream.folders[folder.ID] = folder
+	upstream.paused[folder.ID] = true
+	return nil
 }
 
 func (upstream *fakeUpstream) Done() <-chan error { return upstream.done }
@@ -228,6 +304,113 @@ func TestRunEnrollsCardThroughControlSocket(t *testing.T) {
 	}
 }
 
+func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
+	config := testConfig(t)
+	saves := filepath.Join(config.Sources[0].Root, "Saves")
+	states := filepath.Join(config.Sources[0].Root, "States")
+	if err := os.MkdirAll(saves, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(saves, "slot.sav"), []byte("save-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources[0].SavesPath = saves
+	config.Sources[0].StatesPath = states
+	card := cards.Card{
+		Source: config.Sources[0], Identity: cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"},
+		State: cards.StateEnrolled, Present: true, Writable: true,
+	}
+	upstream := newFakeB3Upstream()
+	runner := Runner{
+		Config: config,
+		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		Recover: func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
+			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
+		},
+		EnsureIdentity: successfulIdentity,
+		ApplyPause:     successfulPause,
+		StartProcess: func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
+			return upstream, nil
+		},
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) {
+			return []cards.Card{card}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	waitForControlSocket(t, config.ControlSocket)
+
+	plan := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`)
+	if !plan.OK || plan.Result == nil || plan.Result.Onboarding == nil || plan.Result.Onboarding.FileCount != 1 || !plan.Result.Onboarding.SnapshotPossible {
+		t.Fatalf("onboarding plan = %+v", plan)
+	}
+	planID := plan.Result.Onboarding.PlanID
+	create := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"%s","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":true}}`, planID))
+	if !create.OK || create.Result == nil || len(create.Result.Folders) != 1 ||
+		create.Result.Folders[0].FirstSyncState != "required" || !create.Result.Folders[0].Paused {
+		t.Fatalf("onboarding create = %+v", create)
+	}
+	folderID := create.Result.Folders[0].ID
+	prepare := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"%s","confirmed":true,"snapshot_limit_acknowledged":true}}`, folderID))
+	if !prepare.OK || prepare.Result == nil || prepare.Result.Folders[0].FirstSyncState != "ready" ||
+		prepare.Result.Folders[0].SnapshotFiles != 1 || prepare.Result.Folders[0].LocalItems != 1 || prepare.Result.Folders[0].GlobalItems != 2 {
+		t.Fatalf("first-sync prepare = %+v", prepare)
+	}
+	start := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
+	if !start.OK || start.Result == nil || start.Result.Folders[0].FirstSyncState != "complete" || start.Result.Folders[0].Paused {
+		t.Fatalf("first-sync start = %+v", start)
+	}
+
+	toSendOnly := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"sendonly","op":"folder.type.set","args":{"folder_id":"%s","folder_type":"sendonly","confirmed":true}}`, folderID))
+	if !toSendOnly.OK || toSendOnly.Result.Folders[0].Type != "sendonly" ||
+		toSendOnly.Result.Folders[0].FirstSyncState != "required" || !toSendOnly.Result.Folders[0].Paused {
+		t.Fatalf("send-only transition = %+v", toSendOnly)
+	}
+	startSendOnly := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"start-sendonly","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
+	if !startSendOnly.OK || startSendOnly.Result.Folders[0].FirstSyncState != "complete" || startSendOnly.Result.Folders[0].Paused {
+		t.Fatalf("send-only start = %+v", startSendOnly)
+	}
+
+	toReceive := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"receive","op":"folder.type.set","args":{"folder_id":"%s","folder_type":"sendreceive","confirmed":true}}`, folderID))
+	if !toReceive.OK || toReceive.Result.Folders[0].FirstSyncState != "required" || !toReceive.Result.Folders[0].Paused {
+		t.Fatalf("receive transition = %+v", toReceive)
+	}
+	unsafeStart := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"unsafe-start","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
+	if unsafeStart.OK || unsafeStart.Error == nil || unsafeStart.Error.Code != "operation-failed" {
+		t.Fatalf("receive transition reused old snapshot = %+v", unsafeStart)
+	}
+	prepareAgain := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"prepare-again","op":"folder.first-sync.prepare","args":{"folder_id":"%s","confirmed":true,"snapshot_limit_acknowledged":true}}`, folderID))
+	if !prepareAgain.OK || prepareAgain.Result.Folders[0].FirstSyncState != "ready" {
+		t.Fatalf("receive re-prepare = %+v", prepareAgain)
+	}
+	startAgain := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"start-again","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
+	if !startAgain.OK || startAgain.Result.Folders[0].FirstSyncState != "complete" || startAgain.Result.Folders[0].Paused {
+		t.Fatalf("receive restart = %+v", startAgain)
+	}
+	if len(upstream.pauseCalls) < 5 || upstream.pauseCalls[len(upstream.pauseCalls)-1] {
+		t.Fatalf("upstream pause transitions = %v", upstream.pauseCalls)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunReturnsUnexpectedUpstreamExit(t *testing.T) {
 	config := testConfig(t)
 	lifecycle := &fakeLifecycle{}
@@ -286,6 +469,42 @@ func TestRunServesReportedConflictWithoutSecondUpstream(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func waitForControlSocket(t *testing.T, socket string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Lstat(socket); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("control socket did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func sendUIControlRequest(t *testing.T, socket, request string) uicontrol.Response {
+	t.Helper()
+	connection, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := life1.Write(connection, json.RawMessage(request)); err != nil {
+		_ = connection.Close()
+		t.Fatal(err)
+	}
+	payload, err := life1.Read(connection)
+	_ = connection.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response uicontrol.Response
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func testServiceRunner(config Config, lifecycle *fakeLifecycle, upstream *fakeUpstream) Runner {

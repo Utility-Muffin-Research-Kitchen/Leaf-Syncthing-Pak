@@ -4,8 +4,10 @@
 #include "catastrophe_widgets.h"
 
 #include "ls_ctl1.h"
+#include "ls_framed_socket.h"
 #include "ls_ui_control.h"
 #include "qrcodegen.h"
+#include "cJSON.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,10 +26,12 @@ typedef struct {
     ls_ctl1_status service;
     ls_ui_status status;
     int controller_available;
+    int exit_requested;
     char error[256];
 } ls_app;
 
 static void ls_show_folder_actions(ls_app *app, const char *folder_id);
+static void ls_add_folder(ls_app *app);
 static void ls_show_devices(ls_app *app);
 static void ls_show_recovery(ls_app *app);
 static void ls_show_settings(ls_app *app);
@@ -175,46 +179,71 @@ static void ls_show_cards(ls_app *app) {
 }
 
 static void ls_show_folders(ls_app *app) {
-    cat_options_item items[LS_UI_MAX_FOLDERS];
+    cat_options_item items[LS_UI_MAX_FOLDERS + 1];
     cat_option item_options[LS_UI_MAX_FOLDERS];
     char values[LS_UI_MAX_FOLDERS][128];
     cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
-                                {.button = CAT_BTN_A, .label = "Details", .is_confirm = true}};
-    cat_options_list_opts options = {0};
-    cat_options_list_result result = {0};
-    int index;
-    ls_refresh(app);
-    if (!app->controller_available) {
-        ls_message(app->error);
-        return;
-    }
-    if (app->status.folder_count == 0) {
-        ls_message("No Syncthing folders are configured yet. Guided setup arrives in the next phase.");
-        return;
-    }
-    memset(items, 0, sizeof(items));
-    memset(item_options, 0, sizeof(item_options));
-    for (index = 0; index < app->status.folder_count; index++) {
-        ls_ui_folder *folder = &app->status.folders[index];
-        snprintf(values[index], sizeof(values[index]), "%s · %s%s", folder->state, folder->type,
-                 folder->pending_rescan ? " · rescan pending" : "");
-        items[index].label = folder->label;
-        items[index].type = CAT_OPT_CLICKABLE;
-        item_options[index] = (cat_option){.label = values[index], .value = values[index]};
-        items[index].options = &item_options[index];
-        items[index].option_count = 1;
-    }
-    options.title = "Folders";
-    options.items = items;
-    options.item_count = app->status.folder_count;
-    options.footer = footer;
-    options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
-    if (cat_options_list(&options, &result) != CAT_CANCELLED && result.action == CAT_ACTION_SELECTED &&
-        result.focused_index >= 0 && result.focused_index < app->status.folder_count) {
-        ls_ui_folder *folder = &app->status.folders[result.focused_index];
-        char folder_id[sizeof(folder->id)];
-        snprintf(folder_id, sizeof(folder_id), "%s", folder->id);
-        ls_show_folder_actions(app, folder_id);
+                                {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
+    int focus = 0;
+    int scroll = 0;
+    for (;;) {
+        cat_options_list_opts options = {0};
+        cat_options_list_result result = {0};
+        int index;
+        int item_count = 0;
+        int add_available;
+        int action;
+        ls_refresh(app);
+        if (!app->controller_available) {
+            ls_message(app->error);
+            return;
+        }
+        add_available = ls_ui_has_capability(&app->status, "folder.onboard.plan");
+        memset(items, 0, sizeof(items));
+        memset(item_options, 0, sizeof(item_options));
+        if (add_available) {
+            items[item_count++] = (cat_options_item){.label = "Add managed folder", .type = CAT_OPT_CLICKABLE};
+        }
+        for (index = 0; index < app->status.folder_count; index++) {
+            ls_ui_folder *folder = &app->status.folders[index];
+            snprintf(values[index], sizeof(values[index]), "%s · %s%s%s", folder->state, folder->type,
+                     folder->first_sync_state[0] && strcmp(folder->first_sync_state, "complete") != 0
+                         ? " · setup required" : "",
+                     folder->pending_rescan ? " · rescan pending" : "");
+            items[item_count].label = folder->label;
+            items[item_count].type = CAT_OPT_CLICKABLE;
+            item_options[index] = (cat_option){.label = values[index], .value = values[index]};
+            items[item_count].options = &item_options[index];
+            items[item_count].option_count = 1;
+            item_count++;
+        }
+        if (item_count == 0) {
+            ls_message("No managed folders are configured, and folder setup is unavailable in this controller build.");
+            return;
+        }
+        options.title = "Folders";
+        options.items = items;
+        options.item_count = item_count;
+        options.footer = footer;
+        options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+        options.initial_selected_index = focus < item_count ? focus : 0;
+        options.visible_start_index = scroll;
+        action = cat_options_list(&options, &result);
+        focus = result.focused_index;
+        scroll = result.visible_start_index;
+        if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
+        if (result.action != CAT_ACTION_SELECTED) continue;
+        if (add_available && focus == 0) {
+            ls_add_folder(app);
+        } else {
+            int folder_index = focus - (add_available ? 1 : 0);
+            if (folder_index >= 0 && folder_index < app->status.folder_count) {
+                char folder_id[sizeof(app->status.folders[0].id)];
+                snprintf(folder_id, sizeof(folder_id), "%s", app->status.folders[folder_index].id);
+                ls_show_folder_actions(app, folder_id);
+            }
+        }
+        if (app->exit_requested) return;
     }
 }
 
@@ -339,6 +368,228 @@ static const char *ls_identity_suffix(const char *identity) {
     return length > 8u ? identity + length - 8u : identity;
 }
 
+static int ls_choose_labels(const char *title, const char *const *labels, int count) {
+    cat_options_item items[16];
+    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Cancel"},
+                                {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
+    cat_options_list_opts options = {0};
+    cat_options_list_result result = {0};
+    int index;
+    if (!labels || count <= 0 || count > (int)(sizeof(items) / sizeof(items[0]))) return -1;
+    memset(items, 0, sizeof(items));
+    for (index = 0; index < count; index++) {
+        items[index] = (cat_options_item){.label = labels[index], .type = CAT_OPT_CLICKABLE};
+    }
+    options.title = title;
+    options.items = items;
+    options.item_count = count;
+    options.footer = footer;
+    options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+    if (cat_options_list(&options, &result) == CAT_CANCELLED || result.action != CAT_ACTION_SELECTED ||
+        result.focused_index < 0 || result.focused_index >= count) return -1;
+    return result.focused_index;
+}
+
+static const char *ls_folder_type_label(const char *folder_type) {
+    if (strcmp(folder_type, "sendonly") == 0) return "Send Only";
+    if (strcmp(folder_type, "receiveonly") == 0) return "Receive Only";
+    return "Send & Receive";
+}
+
+static const char *ls_choose_folder_type(const char *title) {
+    static const char *const labels[] = {"Send & Receive (recommended)", "Send Only", "Receive Only"};
+    static const char *const values[] = {"sendreceive", "sendonly", "receiveonly"};
+    int selected = ls_choose_labels(title, labels, 3);
+    return selected >= 0 ? values[selected] : NULL;
+}
+
+static int ls_choose_folder_card(ls_app *app, char *source_id, size_t source_size) {
+    cat_options_item items[LS_UI_MAX_CARDS];
+    cat_option values[LS_UI_MAX_CARDS];
+    char value_text[LS_UI_MAX_CARDS][64];
+    int card_indexes[LS_UI_MAX_CARDS];
+    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Cancel"},
+                                {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
+    cat_options_list_opts options = {0};
+    cat_options_list_result result = {0};
+    int index;
+    int count = 0;
+    memset(items, 0, sizeof(items));
+    memset(values, 0, sizeof(values));
+    for (index = 0; index < app->status.card_count; index++) {
+        ls_ui_card *card = &app->status.cards[index];
+        if (!card->source_id[0] || !card->enrolled || !card->present || !card->writable || card->duplicate_id) continue;
+        snprintf(value_text[count], sizeof(value_text[count]), "...%s · %s", card->id_suffix, card->state);
+        values[count] = (cat_option){.label = value_text[count], .value = value_text[count]};
+        items[count] = (cat_options_item){.label = card->slot, .type = CAT_OPT_CLICKABLE,
+                                          .options = &values[count], .option_count = 1};
+        card_indexes[count] = index;
+        count++;
+    }
+    if (count == 0) {
+        ls_message("Enroll a present writable card before adding a managed folder.");
+        return -1;
+    }
+    options.title = "Choose Card";
+    options.items = items;
+    options.item_count = count;
+    options.footer = footer;
+    options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+    if (cat_options_list(&options, &result) == CAT_CANCELLED || result.action != CAT_ACTION_SELECTED ||
+        result.focused_index < 0 || result.focused_index >= count) return -1;
+    if (snprintf(source_id, source_size, "%s",
+                 app->status.cards[card_indexes[result.focused_index]].source_id) >= (int)source_size) return -1;
+    return 0;
+}
+
+static void ls_first_sync_flow(ls_app *app, const char *folder_id) {
+    ls_ui_folder *folder;
+    char stable_id[128];
+    if (!folder_id || snprintf(stable_id, sizeof(stable_id), "%s", folder_id) >= (int)sizeof(stable_id)) return;
+    ls_refresh(app);
+    folder = ls_find_folder(app, stable_id);
+    if (!app->controller_available || !folder) {
+        ls_message(app->error[0] ? app->error : "The folder is no longer available.");
+        return;
+    }
+    if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") == 0) {
+        ls_message("First-sync protection is already complete for this folder.");
+        return;
+    }
+    if (strcmp(folder->type, "sendonly") != 0 && strcmp(folder->first_sync_state, "ready") != 0) {
+        const char *warning =
+            "Leaf will make a durable safety copy on this same card before receiving files. "
+            "This is best-effort, not an atomic snapshot: an emulator or Thing-File edit during the copy can mix moments or capture a partly written file. "
+            "Stop writers and continue?";
+        if (!ls_confirm(warning, "Prepare")) return;
+        if (ls_ui_folder_first_sync_prepare(app->control_socket, stable_id, &app->status,
+                                            app->error, sizeof(app->error)) != 0) {
+            char message[768];
+            snprintf(message, sizeof(message), "%s\n\nReceiving remains blocked. Change this folder to Send Only instead?",
+                     app->error[0] ? app->error : "The safety snapshot failed.");
+            if (ls_confirm(message, "Send Only") &&
+                ls_ui_folder_type_set(app->control_socket, stable_id, "sendonly", &app->status,
+                                      app->error, sizeof(app->error)) != 0) ls_message(app->error);
+            else if (ls_find_folder(app, stable_id) &&
+                     strcmp(ls_find_folder(app, stable_id)->type, "sendonly") == 0)
+                ls_first_sync_flow(app, stable_id);
+            return;
+        }
+        folder = ls_find_folder(app, stable_id);
+        if (!folder) return;
+    }
+    {
+        char snapshot_bytes[32];
+        char summary[1280];
+        ls_format_bytes(folder->snapshot_bytes, snapshot_bytes, sizeof(snapshot_bytes));
+        if (strcmp(folder->type, "sendonly") == 0) {
+            snprintf(summary, sizeof(summary),
+                     "This Send Only folder will seed its peers without receiving changes.\n\n"
+                     "Local items: %d\nPeer/global items: %d\n\n"
+                     "Enable versioning on the receiving hub first. Synchronization can propagate deletion or corruption and is not a backup.",
+                     folder->local_items, folder->global_items);
+        } else {
+            snprintf(summary, sizeof(summary),
+                     "Safety snapshot: %s\nFiles: %d\nDirectories: %d\nSize: %s\n\n"
+                     "Local items: %d\nPeer/global items: %d\n\n"
+                     "The pending two-way merge may create conflict files. Enable versioning on the hub before starting; Leaf keeps five local versions.",
+                     folder->snapshot_name[0] ? folder->snapshot_name : "ready",
+                     folder->snapshot_files, folder->snapshot_directories, snapshot_bytes,
+                     folder->local_items, folder->global_items);
+        }
+        if (!ls_confirm(summary, "Hub ready")) return;
+    }
+    if (!ls_confirm("Start first sync now? This explicitly releases the first-sync safety pause. Storage and manual pause reasons still remain in force.",
+                    "Start")) return;
+    if (ls_ui_folder_first_sync_start(app->control_socket, stable_id, &app->status,
+                                      app->error, sizeof(app->error)) != 0) {
+        ls_message(app->error);
+        return;
+    }
+    ls_message("First-sync protection is complete. Syncthing may now process this folder when no other pause reason applies.");
+}
+
+static void ls_add_folder(ls_app *app) {
+    static const char *const kind_labels[] = {"Leaf Saves (recommended)", "Leaf States (advanced)"};
+    static const char *const kind_values[] = {"saves", "states"};
+    char source_id[65];
+    const char *folder_type;
+    const char *kind;
+    int kind_index;
+    int states_acknowledged = 0;
+    ls_ui_onboarding plan;
+
+    ls_refresh(app);
+    if (!app->controller_available || ls_choose_folder_card(app, source_id, sizeof(source_id)) != 0) return;
+    kind_index = ls_choose_labels("Choose Folder", kind_labels, 2);
+    if (kind_index < 0) return;
+    kind = kind_values[kind_index];
+    if (strcmp(kind, "states") == 0) {
+        states_acknowledged = ls_confirm(
+            "Save states depend on the emulator, core, and version. They can be unsafe or non-portable across devices. Sync States anyway?",
+            "I understand");
+        if (!states_acknowledged) return;
+    }
+    folder_type = ls_choose_folder_type("Sync Direction");
+    if (!folder_type) return;
+
+review:
+    if (ls_ui_folder_onboard_plan(app->control_socket, source_id, kind, folder_type,
+                                  &app->status, app->error, sizeof(app->error)) != 0) {
+        ls_message(app->error);
+        return;
+    }
+    if (!app->status.onboarding_present) {
+        ls_message("The controller did not return a folder review.");
+        return;
+    }
+    plan = app->status.onboarding;
+    if (strcmp(plan.folder_type, "sendonly") != 0 && !plan.snapshot_possible) {
+        char content[32], available[32], message[768];
+        ls_format_bytes(plan.content_bytes, content, sizeof(content));
+        ls_format_bytes(plan.available_bytes, available, sizeof(available));
+        snprintf(message, sizeof(message),
+                 "Receiving is blocked because this card cannot hold the required same-card safety snapshot.\n\nContent: %s\nAvailable: %s\n\nReview Send Only instead?",
+                 content, available);
+        if (!ls_confirm(message, "Send Only")) return;
+        folder_type = "sendonly";
+        goto review;
+    }
+    {
+        char content[32], available[32], message[1600];
+        ls_format_bytes(plan.content_bytes, content, sizeof(content));
+        ls_format_bytes(plan.available_bytes, available, sizeof(available));
+        snprintf(message, sizeof(message),
+                 "%s\nPath: %s\nDirection: %s\nFiles: %d\nDirectories: %d\nContent: %s\nAvailable: %s\nPeers: %d%s",
+                 plan.label, plan.path, ls_folder_type_label(plan.folder_type), plan.file_count,
+                 plan.directory_count, content, available, plan.peer_count,
+                 strcmp(plan.folder_type, "sendonly") == 0 ? "" : "\nA same-card safety snapshot is required before receiving.");
+        if (!ls_confirm(message, "Continue")) return;
+    }
+    if (!ls_confirm(
+            "Thing-File is a general-purpose editor and is not coordinated with Syncthing. Do not manually edit this managed tree in Thing-File while Syncthing is active.",
+            "I understand")) return;
+    if (!ls_confirm("Create this managed folder paused? Nothing syncs until you complete the first-sync review and explicitly start it.",
+                    "Create")) return;
+    if (ls_ui_folder_onboard_create(app->control_socket, plan.plan_id,
+                                    states_acknowledged != 0, true,
+                                    &app->status, app->error, sizeof(app->error)) != 0) {
+        if (strstr(app->error, "enough free space") != NULL) {
+            char message[768];
+            snprintf(message, sizeof(message), "%s\n\nReview Send Only instead?",
+                     app->error[0] ? app->error : "Receiving is blocked because the card no longer has room for a safety snapshot.");
+            if (ls_confirm(message, "Send Only")) {
+                folder_type = "sendonly";
+                goto review;
+            }
+            return;
+        }
+        ls_message(app->error);
+        return;
+    }
+    ls_first_sync_flow(app, plan.folder_id);
+}
+
 static void ls_show_folder_history(ls_app *app, const ls_ui_folder *folder) {
     cat_options_item items[LS_UI_MAX_STORAGE_ROWS];
     cat_option values[LS_UI_MAX_STORAGE_ROWS];
@@ -391,9 +642,76 @@ static void ls_show_folder_history(ls_app *app, const ls_ui_folder *folder) {
     }
 }
 
-static void ls_show_folder_conflicts(const ls_ui_folder *folder) {
-    cat_options_item items[LS_UI_MAX_CONFLICTS];
-    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"}};
+static int ls_find_thing_file(char *pak_dir, size_t pak_dir_size) {
+    const char *apps_paths = getenv("APPS_PATHS");
+    const char *apps_path = getenv("APPS_PATH");
+    const char *platform = getenv("PLATFORM");
+    const char *cursor;
+    if (!pak_dir || pak_dir_size == 0 || !platform || !platform[0]) return -1;
+    cursor = apps_paths && apps_paths[0] ? apps_paths : apps_path;
+    while (cursor && cursor[0]) {
+        const char *separator = strchr(cursor, ':');
+        size_t root_length = separator ? (size_t)(separator - cursor) : strlen(cursor);
+        char root[768];
+        if (root_length > 0 && root_length < sizeof(root)) {
+            memcpy(root, cursor, root_length);
+            root[root_length] = '\0';
+            if (snprintf(pak_dir, pak_dir_size, "%s/%s/Thing-File.pak", root, platform) < (int)pak_dir_size &&
+                access(pak_dir, F_OK) == 0) return 0;
+            if (snprintf(pak_dir, pak_dir_size, "%s/shared/Thing-File.pak", root) < (int)pak_dir_size &&
+                access(pak_dir, F_OK) == 0) return 0;
+        }
+        cursor = separator ? separator + 1 : NULL;
+    }
+    return -1;
+}
+
+static int ls_launch_thing_file(ls_app *app) {
+    char pak_dir[1024];
+    char *request_body = NULL;
+    char *response_body = NULL;
+    size_t response_size = 0;
+    const char *parse_end = NULL;
+    cJSON *request = NULL;
+    cJSON *response = NULL;
+    const cJSON *type;
+    int result = -1;
+    if (ls_find_thing_file(pak_dir, sizeof(pak_dir)) != 0) {
+        snprintf(app->error, sizeof(app->error), "%s", "Thing-File is not installed on an available app card");
+        return -1;
+    }
+    request = cJSON_CreateObject();
+    if (!request || !cJSON_AddStringToObject(request, "type", "launch-app") ||
+        !cJSON_AddStringToObject(request, "pak_dir", pak_dir) ||
+        !(request_body = cJSON_PrintUnformatted(request)) ||
+        ls_frame_request(app->daemon_socket, request_body, strlen(request_body),
+                         &response_body, &response_size, 30000) != 0) {
+        snprintf(app->error, sizeof(app->error), "%s", "Leaf could not request Thing-File");
+        goto done;
+    }
+    response = cJSON_ParseWithLengthOpts(response_body, response_size, &parse_end, false);
+    type = cJSON_GetObjectItemCaseSensitive(response, "type");
+    if (!response || parse_end != response_body + response_size || !cJSON_IsString(type) ||
+        strcmp(type->valuestring, "ok") != 0) {
+        const cJSON *message = cJSON_GetObjectItemCaseSensitive(response, "message");
+        snprintf(app->error, sizeof(app->error), "%s",
+                 cJSON_IsString(message) ? message->valuestring : "Leaf refused the Thing-File launch");
+        goto done;
+    }
+    app->exit_requested = 1;
+    result = 0;
+done:
+    cJSON_Delete(request);
+    cJSON_Delete(response);
+    cJSON_free(request_body);
+    free(response_body);
+    return result;
+}
+
+static void ls_show_folder_conflicts(ls_app *app, const ls_ui_folder *folder) {
+    cat_options_item items[LS_UI_MAX_CONFLICTS + 2];
+    cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
+                                {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
     cat_options_list_opts options = {0};
     cat_options_list_result result = {0};
     int index;
@@ -405,28 +723,58 @@ static void ls_show_folder_conflicts(const ls_ui_folder *folder) {
     for (index = 0; index < folder->conflict_path_count; index++) {
         items[index] = (cat_options_item){.label = folder->conflicts[index], .type = CAT_OPT_CLICKABLE};
     }
+    items[folder->conflict_path_count] = (cat_options_item){.label = "Rescan folder", .type = CAT_OPT_CLICKABLE};
+    items[folder->conflict_path_count + 1] = (cat_options_item){.label = "Open Thing-File", .type = CAT_OPT_CLICKABLE};
     options.title = folder->conflict_count > folder->conflict_path_count
         ? "Conflicts (partial list)" : "Conflicts";
     options.items = items;
-    options.item_count = folder->conflict_path_count;
+    options.item_count = folder->conflict_path_count + 2;
     options.footer = footer;
-    options.footer_count = cat_hints_enabled_from_env() ? 1 : 0;
-    (void)cat_options_list(&options, &result);
+    options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+    if (cat_options_list(&options, &result) == CAT_CANCELLED || result.action != CAT_ACTION_SELECTED) return;
+    if (result.focused_index >= 0 && result.focused_index < folder->conflict_path_count) {
+        char detail[512];
+        snprintf(detail, sizeof(detail), "Conflict file:\n%s\n\nLeaf never deletes or resolves conflicts automatically.",
+                 folder->conflicts[result.focused_index]);
+        ls_message(detail);
+    } else if (result.focused_index == folder->conflict_path_count) {
+        if (ls_ui_folder_action(app->control_socket, "folder.rescan", folder->id, NULL,
+                                &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
+        else ls_message("Rescan requested. Conflict files remain until you resolve them manually.");
+    } else if (result.focused_index == folder->conflict_path_count + 1 &&
+               ls_confirm("Open Thing-File? Syncthing is not automatically paused. Pause this folder first, and do not edit it concurrently with active synchronization.",
+                          "Open")) {
+        if (ls_launch_thing_file(app) != 0) ls_message(app->error);
+    }
 }
 
 static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
+    enum {
+        LS_FOLDER_DETAILS,
+        LS_FOLDER_FIRST_SYNC,
+        LS_FOLDER_TYPE,
+        LS_FOLDER_PAUSE,
+        LS_FOLDER_RESCAN,
+        LS_FOLDER_RENAME,
+        LS_FOLDER_HISTORY,
+        LS_FOLDER_CONFLICTS,
+    };
     int focus = 0;
     int inspected = 0;
     for (;;) {
-        cat_options_item items[6];
-        cat_option values[4];
+        cat_options_item items[8];
+        cat_option values[5];
+        int commands[8];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
         cat_options_list_result result = {0};
         char history_value[48];
         char conflict_value[32];
+        char first_sync_value[48];
         ls_ui_folder *folder;
+        int item_count = 0;
+        int command;
         int action;
         ls_refresh(app);
         if (!app->controller_available || !(folder = ls_find_folder(app, folder_id))) {
@@ -458,38 +806,85 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
             snprintf(conflict_value, sizeof(conflict_value), "%d", folder->conflict_count);
             values[2] = (cat_option){.label = history_value, .value = history_value};
             values[3] = (cat_option){.label = conflict_value, .value = conflict_value};
+            snprintf(first_sync_value, sizeof(first_sync_value), "%s",
+                     folder->first_sync_state[0] ? folder->first_sync_state : "not required");
+            values[4] = (cat_option){.label = first_sync_value, .value = first_sync_value};
         }
-        items[0] = (cat_options_item){.label = "Details", .type = CAT_OPT_CLICKABLE,
-                                      .options = &values[0], .option_count = 1};
-        items[1] = (cat_options_item){.label = folder->paused ? "Resume" : "Pause",
-                                      .type = CAT_OPT_CLICKABLE, .options = &values[1], .option_count = 1};
-        items[2] = (cat_options_item){.label = "Rescan", .type = CAT_OPT_CLICKABLE};
-        items[3] = (cat_options_item){.label = "Rename", .type = CAT_OPT_CLICKABLE};
-        items[4] = (cat_options_item){.label = "Snapshot history", .type = CAT_OPT_CLICKABLE,
-                                      .options = &values[2], .option_count = 1};
-        items[5] = (cat_options_item){.label = "Conflicts", .type = CAT_OPT_CLICKABLE,
-                                      .options = &values[3], .option_count = 1};
+        commands[item_count] = LS_FOLDER_DETAILS;
+        items[item_count++] = (cat_options_item){.label = "Details", .type = CAT_OPT_CLICKABLE,
+                                                  .options = &values[0], .option_count = 1};
+        if (ls_ui_has_capability(&app->status, "folder.first-sync.start") &&
+            folder->first_sync_state[0] && strcmp(folder->first_sync_state, "complete") != 0) {
+            commands[item_count] = LS_FOLDER_FIRST_SYNC;
+            items[item_count++] = (cat_options_item){.label = "Complete first sync", .type = CAT_OPT_CLICKABLE,
+                                                      .options = &values[4], .option_count = 1};
+        }
+        if (ls_ui_has_capability(&app->status, "folder.type.set")) {
+            commands[item_count] = LS_FOLDER_TYPE;
+            items[item_count++] = (cat_options_item){.label = "Change sync direction", .type = CAT_OPT_CLICKABLE};
+        }
+        commands[item_count] = LS_FOLDER_PAUSE;
+        items[item_count++] = (cat_options_item){.label = folder->paused ? "Resume" : "Pause",
+                                                  .type = CAT_OPT_CLICKABLE, .options = &values[1], .option_count = 1};
+        commands[item_count] = LS_FOLDER_RESCAN;
+        items[item_count++] = (cat_options_item){.label = "Rescan", .type = CAT_OPT_CLICKABLE};
+        commands[item_count] = LS_FOLDER_RENAME;
+        items[item_count++] = (cat_options_item){.label = "Rename", .type = CAT_OPT_CLICKABLE};
+        commands[item_count] = LS_FOLDER_HISTORY;
+        items[item_count++] = (cat_options_item){.label = "Snapshot history", .type = CAT_OPT_CLICKABLE,
+                                                  .options = &values[2], .option_count = 1};
+        commands[item_count] = LS_FOLDER_CONFLICTS;
+        items[item_count++] = (cat_options_item){.label = "Conflicts", .type = CAT_OPT_CLICKABLE,
+                                                  .options = &values[3], .option_count = 1};
         options.title = folder->label;
         options.items = items;
-        options.item_count = 6;
+        options.item_count = item_count;
         options.footer = footer;
         options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
-        options.initial_selected_index = focus;
+        options.initial_selected_index = focus < item_count ? focus : 0;
         action = cat_options_list(&options, &result);
         focus = result.focused_index;
         if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
-        if (result.action != CAT_ACTION_SELECTED) continue;
-        if (focus == 0) {
-            char local[32], global[32], detail[1024];
+        if (result.action != CAT_ACTION_SELECTED || focus < 0 || focus >= item_count) continue;
+        command = commands[focus];
+        if (command == LS_FOLDER_DETAILS) {
+            char local[32], global[32], detail[1900];
             ls_format_bytes(folder->local_bytes, local, sizeof(local));
             ls_format_bytes(folder->global_bytes, global, sizeof(global));
-            snprintf(detail, sizeof(detail), "%s\nPath: %s\nType: %s\nState: %s\nLocal: %s\nGlobal: %s\nPeers: %d\nLast activity: %s\nVersioning: %s",
+            snprintf(detail, sizeof(detail), "%s\nPath: %s\nType: %s\nState: %s\nFirst sync: %s\n"
+                     "Local: %s (%d items)\nGlobal: %s (%d items)\nPeers: %d\nLast activity: %s\nVersioning: %s%s%s\n\n"
+                     "Gameplay is stop-only. Stopping sync can add about 7.4 s before a game starts. Control usually returns about 0.8 s after play; a forced 25,000-file index rebuild can take about two minutes.\n\n"
+                     "Manual Thing-File edits are not coordinated. Do not edit this tree there while Syncthing is active.",
                      folder->label, folder->path, folder->type, folder->state,
-                     local, global, folder->peer_count,
+                     folder->first_sync_state[0] ? folder->first_sync_state : "not required",
+                     local, folder->local_items, global, folder->global_items, folder->peer_count,
                      folder->last_sync[0] ? folder->last_sync : "Unknown",
-                     folder->versioning[0] ? folder->versioning : "Off");
+                     folder->versioning[0] ? folder->versioning : "Off",
+                     folder->snapshot_name[0] ? "\nSafety snapshot: " : "",
+                     folder->snapshot_name[0] ? folder->snapshot_name : "");
             ls_message(detail);
-        } else if (focus == 1) {
+        } else if (command == LS_FOLDER_FIRST_SYNC) {
+            ls_first_sync_flow(app, folder->id);
+        } else if (command == LS_FOLDER_TYPE) {
+            const char *next = ls_choose_folder_type("Sync Direction");
+            if (next && strcmp(next, folder->type) != 0) {
+                const char *message = strcmp(next, "sendonly") == 0
+                    ? "Change to Send Only? Incoming changes will stop. A later change back to receiving reruns first-sync protection."
+                    : "Change to a receiving direction? If this crosses from Send Only, Leaf invalidates prior protection and requires a fresh same-card safety snapshot before receiving.";
+                if (ls_confirm(message, "Change")) {
+                    if (ls_ui_folder_type_set(app->control_socket, folder->id, next, &app->status,
+                                              app->error, sizeof(app->error)) != 0) {
+                        ls_message(app->error);
+                    } else {
+                        ls_ui_folder *updated = ls_find_folder(app, folder_id);
+                        if (updated && updated->first_sync_state[0] &&
+                            strcmp(updated->first_sync_state, "complete") != 0 &&
+                            ls_confirm("This direction requires a new first-sync review. Complete it now?", "Review"))
+                            ls_first_sync_flow(app, folder_id);
+                    }
+                }
+            }
+        } else if (command == LS_FOLDER_PAUSE) {
             const char *operation = folder->paused ? "folder.resume" : "folder.pause";
             const char *message = folder->paused
                 ? "Resume this folder? Storage and first-sync safety pauses remain in force."
@@ -498,24 +893,25 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
                 ls_ui_folder_action(app->control_socket, operation, folder->id, NULL,
                                     &app->status, app->error, sizeof(app->error)) != 0)
                 ls_message(app->error);
-        } else if (focus == 2) {
+        } else if (command == LS_FOLDER_RESCAN) {
             if (ls_ui_folder_action(app->control_socket, "folder.rescan", folder->id, NULL,
                                     &app->status, app->error, sizeof(app->error)) != 0)
                 ls_message(app->error);
             else if (folder->paused)
                 ls_message("The rescan is queued until the final pause reason clears.");
-        } else if (focus == 3) {
+        } else if (command == LS_FOLDER_RENAME) {
             cat_keyboard_result keyboard = {0};
             if (cat_keyboard(folder->label, "Rename this managed folder. Its path cannot be edited here.",
                              CAT_KB_GENERAL, &keyboard) == CAT_OK && keyboard.text[0] &&
                 ls_ui_folder_action(app->control_socket, "folder.rename", folder->id, keyboard.text,
                                     &app->status, app->error, sizeof(app->error)) != 0)
                 ls_message(app->error);
-        } else if (focus == 4) {
+        } else if (command == LS_FOLDER_HISTORY) {
             ls_show_folder_history(app, folder);
-        } else if (focus == 5) {
-            ls_show_folder_conflicts(folder);
+        } else if (command == LS_FOLDER_CONFLICTS) {
+            ls_show_folder_conflicts(app, folder);
         }
+        if (app->exit_requested) return;
     }
 }
 
@@ -1219,6 +1615,7 @@ static void ls_run_overview(ls_app *app) {
         } else if (app->controller_available && focus == 10) {
             ls_show_issues(app);
         }
+        if (app->exit_requested) return;
     }
 }
 

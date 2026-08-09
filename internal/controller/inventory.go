@@ -57,6 +57,10 @@ func collectSnapshotRows(status *uicontrol.StorageStatus, root, cardSuffix strin
 			return err
 		}
 		for _, entry := range entries {
+			if entry.Name() == firstSyncMarkerName || entry.Name() == firstSyncMarkerTemporary ||
+				strings.HasPrefix(entry.Name(), snapshotPartialPrefix) {
+				continue
+			}
 			path := filepath.Join(kindPath, entry.Name())
 			bytes, err := safeTreeBytes(path)
 			if err != nil {

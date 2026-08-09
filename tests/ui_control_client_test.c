@@ -49,11 +49,25 @@ int main(void) {
             "\"category\":\"saves\",\"kind\":\"snapshot\",\"name\":\"first-sync\",\"bytes\":100}]},"
         "\"diagnostics\":{\"last_export_path\":\"/mnt/sdcard/Logs/leaf-syncthing-diagnostics.json\","
             "\"last_exported\":\"2026-08-08T12:00:00Z\"},"
-        "\"cards\":[],\"folders\":[{\"id\":\"leaf-saves-0011223344556677\",\"label\":\"Leaf Saves\","
+        "\"onboarding\":{\"plan_id\":\"00112233445566778899aabbccddeeff\",\"source_id\":\"primary\","
+            "\"card_id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"saves\","
+            "\"folder_type\":\"sendreceive\",\"folder_id\":\"leaf-saves-0011223344556677\","
+            "\"label\":\"Leaf Saves — Primary\",\"path\":\"/mnt/sdcard/Saves\","
+            "\"file_count\":3,\"directory_count\":2,\"content_bytes\":4096,"
+            "\"available_bytes\":8192,\"snapshot_possible\":true,\"peer_count\":1,"
+            "\"states_warning\":false,\"expires_at\":\"2026-08-08T12:05:00Z\"},"
+        "\"cards\":[{\"id\":\"00112233445566778899aabbccddeeff\",\"source_id\":\"primary\","
+            "\"id_suffix\":\"ccddeeff\",\"slot\":\"Primary\",\"root\":\"/mnt/sdcard\","
+            "\"state\":\"enrolled\",\"enrolled\":true,\"present\":true,\"writable\":true,"
+            "\"duplicate_id\":false,\"retained_bytes\":0}],"
+        "\"folders\":[{\"id\":\"leaf-saves-0011223344556677\",\"label\":\"Leaf Saves\","
             "\"card_id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"saves\",\"path\":\"/mnt/sdcard/Saves\","
             "\"type\":\"sendreceive\",\"state\":\"idle\",\"paused\":false,\"pause_reasons\":[],"
-            "\"pending_rescan\":false,\"local_bytes\":10,\"global_bytes\":10,\"peer_count\":1,"
+            "\"pending_rescan\":false,\"local_bytes\":10,\"global_bytes\":10,\"local_items\":3,\"global_items\":4,\"peer_count\":1,"
             "\"last_sync\":\"2026-08-08T12:00:00Z\",\"versioning\":\"simple\",\"conflict_count\":1,"
+            "\"first_sync_state\":\"ready\",\"snapshot_name\":\"first-sync-20260808T120000Z\","
+            "\"snapshot_files\":3,\"snapshot_directories\":2,\"snapshot_bytes\":4096,"
+            "\"first_sync_message\":\"Safety snapshot is durable; explicitly start the merge\","
             "\"conflicts\":[\"game.sync-conflict-20260808-120000-PEER.sav\"],\"issues\":[]}],"
         "\"peers\":[{\"id\":\"PEER\",\"id_suffix\":\"PEER\","
             "\"name\":\"Laptop\",\"state\":\"connected\",\"connection\":\"direct\","
@@ -107,6 +121,13 @@ int main(void) {
     assert(strcmp(status.diagnostics_path,
                   "/mnt/sdcard/Logs/leaf-syncthing-diagnostics.json") == 0);
     assert(status.peer_count == 1 && strcmp(status.peers[0].connection, "direct") == 0);
-    puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + rich status)");
+    assert(status.onboarding_present && status.onboarding.snapshot_possible);
+    assert(status.card_count == 1 && strcmp(status.cards[0].source_id, "primary") == 0);
+    assert(status.onboarding.file_count == 3 && status.onboarding.available_bytes == 8192);
+    assert(status.folder_count == 1 && status.folders[0].local_items == 3 &&
+           status.folders[0].global_items == 4);
+    assert(strcmp(status.folders[0].first_sync_state, "ready") == 0 &&
+           status.folders[0].snapshot_files == 3 && status.folders[0].snapshot_bytes == 4096);
+    puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");
     return 0;
 }

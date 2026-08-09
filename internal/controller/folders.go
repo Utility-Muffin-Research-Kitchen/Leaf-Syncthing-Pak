@@ -43,7 +43,7 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		}
 		row := uicontrol.FolderStatus{
 			ID: folder.ID, Label: folder.Label, Kind: folder.Kind, Path: folder.Path,
-			Type: folder.Type, State: "paused", Paused: len(reasons) > 0,
+			Type: folder.Type, State: "idle",
 			PauseReasons: reasons, PendingRescan: control.PendingRescan, Versioning: folder.VersioningType,
 			Issues: []uicontrol.Issue{}, PeerCount: remotePeerCount(folder.Devices),
 		}
@@ -62,6 +62,8 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 				message = "Multiple mounted cards match this managed folder identity"
 			}
 			addFolderIssue(&row, &issues, code, message)
+			row.PauseReasons = appendUnique(row.PauseReasons, "health")
+			row.Paused = true
 			row.State = "error"
 			rows = append(rows, row)
 			continue
@@ -109,11 +111,25 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 			}
 		}
 		if len(row.Issues) > 0 {
+			row.PauseReasons = appendUnique(row.PauseReasons, "health")
 			row.State = "error"
+		}
+		row.Paused = len(row.PauseReasons) > 0
+		if row.Paused && len(row.Issues) == 0 {
+			row.State = "paused"
 		}
 		rows = append(rows, row)
 	}
 	return rows, issues
+}
+
+func requiredOfflinePauseSet(configured []syncthingconfig.ConfiguredFolder, inventory []cards.Card, controlState map[string]folderControlRecord) map[string]bool {
+	rows, _ := reconcileManagedFolders(configured, inventory, controlState)
+	result := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		result[row.ID] = row.Paused
+	}
+	return result
 }
 
 func remotePeerCount(devices []string) int {

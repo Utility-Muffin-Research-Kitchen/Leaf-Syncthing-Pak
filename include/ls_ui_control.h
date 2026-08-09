@@ -23,6 +23,7 @@ typedef struct {
 
 typedef struct {
     char id[128];
+    char source_id[65];
     char id_suffix[16];
     char slot[32];
     char root[512];
@@ -46,9 +47,17 @@ typedef struct {
     bool pending_rescan;
     long long local_bytes;
     long long global_bytes;
+    int local_items;
+    int global_items;
     int peer_count;
     char last_sync[64];
     char versioning[64];
+    char first_sync_state[32];
+    char snapshot_name[97];
+    int snapshot_files;
+    int snapshot_directories;
+    long long snapshot_bytes;
+    char first_sync_message[241];
     int conflict_count;
     char conflicts[LS_UI_MAX_CONFLICTS][257];
     int conflict_path_count;
@@ -73,6 +82,25 @@ typedef struct {
     char name[160];
     long long bytes;
 } ls_ui_storage_row;
+
+typedef struct {
+    char plan_id[33];
+    char source_id[65];
+    char card_id[129];
+    char kind[16];
+    char folder_type[32];
+    char folder_id[65];
+    char label[97];
+    char path[1025];
+    int file_count;
+    int directory_count;
+    long long content_bytes;
+    long long available_bytes;
+    bool snapshot_possible;
+    int peer_count;
+    bool states_warning;
+    char expires_at[65];
+} ls_ui_onboarding;
 
 typedef struct {
     char controller[32];
@@ -124,6 +152,8 @@ typedef struct {
     int storage_row_count;
     char diagnostics_path[768];
     char diagnostics_exported[64];
+    bool onboarding_present;
+    ls_ui_onboarding onboarding;
     ls_ui_card cards[LS_UI_MAX_CARDS];
     int card_count;
     ls_ui_folder folders[LS_UI_MAX_FOLDERS];
@@ -163,6 +193,36 @@ int ls_ui_folder_action(const char *socket_path,
                         ls_ui_status *status,
                         char *error,
                         size_t error_size);
+int ls_ui_folder_onboard_plan(const char *socket_path,
+                              const char *source_id,
+                              const char *kind,
+                              const char *folder_type,
+                              ls_ui_status *status,
+                              char *error,
+                              size_t error_size);
+int ls_ui_folder_onboard_create(const char *socket_path,
+                                const char *plan_id,
+                                bool states_warning_acknowledged,
+                                bool manual_edit_warning_acknowledged,
+                                ls_ui_status *status,
+                                char *error,
+                                size_t error_size);
+int ls_ui_folder_first_sync_prepare(const char *socket_path,
+                                    const char *folder_id,
+                                    ls_ui_status *status,
+                                    char *error,
+                                    size_t error_size);
+int ls_ui_folder_first_sync_start(const char *socket_path,
+                                  const char *folder_id,
+                                  ls_ui_status *status,
+                                  char *error,
+                                  size_t error_size);
+int ls_ui_folder_type_set(const char *socket_path,
+                          const char *folder_id,
+                          const char *folder_type,
+                          ls_ui_status *status,
+                          char *error,
+                          size_t error_size);
 int ls_ui_device_action(const char *socket_path,
                         const char *operation,
                         const char *device_id,

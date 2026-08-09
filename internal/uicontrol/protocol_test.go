@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 9 {
-		t.Fatalf("checked %d fixtures, want 9", checked)
+	if checked != 14 {
+		t.Fatalf("checked %d fixtures, want 14", checked)
 	}
 }
 
@@ -267,6 +267,80 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 		response = operations.Handle([]byte(request))
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 			t.Fatalf("unsafe action accepted: %s = %+v", request, response)
+		}
+	}
+}
+
+func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		PlanFolder: func(sourceID, kind, folderType string) (Status, *ProtocolError) {
+			called = sourceID + ":" + kind + ":" + folderType
+			status := fixtureStatus()
+			status.Onboarding = &OnboardingStatus{
+				PlanID: "00112233445566778899aabbccddeeff", SourceID: sourceID,
+				CardID: "ffeeddccbbaa99887766554433221100", Kind: kind, FolderType: folderType,
+				FolderID: "leaf-" + kind + "-0011223344556677", Label: "Leaf Saves", Path: "/card/Saves",
+				FileCount: 2, DirectoryCount: 1, ContentBytes: 10, AvailableBytes: 100,
+				SnapshotPossible: true, PeerCount: 1, ExpiresAt: "2026-08-09T12:05:00Z",
+			}
+			return status, nil
+		},
+		CreateFolder: func(planID string, statesAcknowledged, manualAcknowledged bool) (Status, *ProtocolError) {
+			called = planID
+			if statesAcknowledged || !manualAcknowledged {
+				t.Fatalf("create acknowledgments = states %v manual %v", statesAcknowledged, manualAcknowledged)
+			}
+			return fixtureStatus(), nil
+		},
+		PrepareFirstSync: func(folderID string) (Status, *ProtocolError) {
+			called = "prepare:" + folderID
+			return fixtureStatus(), nil
+		},
+		StartFirstSync: func(folderID string, hubAcknowledged bool) (Status, *ProtocolError) {
+			called = "start:" + folderID
+			if !hubAcknowledged {
+				t.Fatal("hub acknowledgment was not forwarded")
+			}
+			return fixtureStatus(), nil
+		},
+		SetFolderType: func(folderID, folderType string) (Status, *ProtocolError) {
+			called = folderID + ":" + folderType
+			return fixtureStatus(), nil
+		},
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
+	if !response.OK || called != "primary:saves:sendreceive" || response.Result == nil || response.Result.Onboarding == nil {
+		t.Fatalf("onboarding plan = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":true}}`))
+	if !response.OK || called != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("onboarding create = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"snapshot_limit_acknowledged":true}}`))
+	if !response.OK || called != "prepare:leaf-saves-0011223344556677" {
+		t.Fatalf("first-sync prepare = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"hub_versioning_acknowledged":true}}`))
+	if !response.OK || called != "start:leaf-saves-0011223344556677" {
+		t.Fatalf("first-sync start = %+v, called=%q", response, called)
+	}
+	response = operations.Handle([]byte(`{"v":1,"id":"type","op":"folder.type.set","args":{"folder_id":"leaf-saves-0011223344556677","folder_type":"sendonly","confirmed":true}}`))
+	if !response.OK || called != "leaf-saves-0011223344556677:sendonly" {
+		t.Fatalf("folder type = %+v, called=%q", response, called)
+	}
+
+	for _, request := range []string{
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"roms","folder_type":"sendreceive"}}`,
+		`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":false}}`,
+		`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"snapshot_limit_acknowledged":false}}`,
+		`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"hub_versioning_acknowledged":false}}`,
+		`{"v":1,"id":"type","op":"folder.type.set","args":{"folder_id":"leaf-saves-0011223344556677","folder_type":"receiveencrypted","confirmed":true}}`,
+	} {
+		response = operations.Handle([]byte(request))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe B3 action accepted: %s = %+v", request, response)
 		}
 	}
 }
