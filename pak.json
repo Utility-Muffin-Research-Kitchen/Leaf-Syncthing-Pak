@@ -11,8 +11,8 @@
     "schema": 1,
     "id": "org.umrk.syncthing",
     "run": {
-      "path": "bin/leaf-syncthing",
-      "args": ["service", "run"]
+      "path": "service.sh",
+      "args": []
     },
     "restart": "on-failure",
     "default_enabled": false,

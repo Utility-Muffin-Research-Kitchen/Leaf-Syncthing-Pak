@@ -1,81 +1,92 @@
 # Leaf Syncthing Pak
 
-Optional Syncthing packaging and device integration for Leaf. Distribution is
-through Pak Rat; this repository is not part of Leaf's default release payload.
+Optional managed Syncthing service for Leaf. Distribution is through Pak Rat;
+this repository is excluded from Leaf's default payload, bootstrap set, and
+managed-app manifest.
 
-The completed B0a upstream/platform qualification and B1 controller are the
-base for the B2 device-management work described in the sibling
-`umrk-workspace` plan. The production
-split is a pure-Go resident controller/gateway plus a separate C/Catastrophe
-foreground UI; the copied cgo/Catastrophe probe remains qualification evidence
-only and is not part of the production UI architecture.
+The product implementation through B3 is complete: a pure-Go resident
+controller/gateway supervises the locked upstream Syncthing binary, while a
+separate C/Catastrophe foreground UI owns device interaction. B4a supplied the
+Jawaka service-pak mutation contract. B4b adds the remaining distribution
+input: an inert compatibility floor, a shared runtime Leaf-version check, and
+local end-to-end catalog qualification.
+
+No production version or release minimum is chosen here. Source metadata stays
+on its development value. B4b candidates use the conspicuously disposable
+`0.0.1` floor, `0.0.2` real package, and `99.99.99` Leaf minimum only inside
+local build output. B5 is the sole owner of final version stamping, catalog
+publication, tags, and release assets.
+
+## Build and test
 
 ```sh
 make verify-upstream
 make test
 make controller-mlp1
-make package-platform PLATFORM=mlp1
+make ui-mlp1
+make package-mlp1
 ```
 
-With an MLP1 connected over ADB, run the controller smoke in an isolated
-fixture with:
+The unstamped development package has no `min_leaf_version`, so local developer
+staging remains possible. A stamped candidate requires both values together:
 
 ```sh
-scripts/adb-mlp1-b1-controller-smoke.sh
-scripts/adb-mlp1-b1-card-safety.sh
-B1_MEASURE_SECONDS=600 scripts/adb-mlp1-b1-controller-smoke.sh
+make package-mlp1 PAK_VERSION=0.0.2 MIN_LEAF_VERSION=99.99.99
+make package-floor-mlp1 FLOOR_PAK_VERSION=0.0.1 MIN_LEAF_VERSION=99.99.99
 ```
 
-After explicitly staging the B2 package and starting its service through
-Jawaka, exercise the real paired HTTPS boundary with:
+The real package's `launch.sh` and `service.sh` share
+`lib/leaf-version-gate.sh`. An incompatible or unreadable installed Leaf
+version opens the inert notice from the foreground launcher and makes the
+service entry point refuse startup. A development package with no minimum is
+allowed. The floor has no service manifest, upstream binary, controller,
+network behavior, or Syncthing data path.
+
+## B4b qualification
+
+Build the disposable artifacts and exercise the existing Leaf feed generator
+and gate-aware client locally:
 
 ```sh
-ADB_SERIAL=serial scripts/adb-mlp1-b2-gateway-smoke.sh
+make b4b-fixture
+make b4b-local-smoke
 ```
 
-The command downloads only the locked upstream release inputs, rejects an
-unexpected redirect host, verifies the release-key fingerprint and checksum
-signature, verifies the archive digest, checks the annotated tag's peeled
-commit, and inspects the archive layout without extracting it.
+With an MLP1 attached, the required device checks are:
 
-The current package is intentionally labeled `0.0.0-b2`: it contains the
-verified upstream binary and the pure-Go resident controller with its LIFE-1
-transport, persistent subscribe/state-reconciliation client, the first six
-ordered controller startup steps (including recoverable
-three-file config recovery, same-filesystem identity generation/promotion, and
-disposable-copy migration that never replaces an existing certificate/key),
-the token-preserving private-socket/LAN-only initial profile, and canonical
-cross-language fixture tests. The package service runs the supervised upstream
-lifecycle, strict PATH-2 card enrollment and inventory, fail-closed pre-B3
-folder/conflict reconciliation, and the private UI control socket. B2 adds the
-standalone C/Catastrophe UI, live folder/peer controls, enforced LAN-only and
-Sync Anywhere profiles, bounded settings/diagnostics/history views, crash-safe
-reset recovery, and the paired read-only HTTPS gateway selected by B0a. Guided
-folder onboarding and release of the durable first-sync pause remain B3 work.
-Jawaka owns the service entrypoint; the foreground launcher only opens the C UI.
-`Leaf-Syncthing-Pak` and
-`build/mlp1/package/Syncthing.pak` are stable staging contracts that will
-outlive this development artifact; the `0.0.0-b2` package itself must never enter a
-Leaf release or production Pak Rat catalog.
+```sh
+ADB_SERIAL=serial make b4b-device-floor-smoke
+ADB_SERIAL=serial make b4b-device-pre-gating-smoke
+ADB_SERIAL=serial CONFIRM_B4B_FAT_SMOKE=1 make b4b-device-transition-smoke
+```
 
-Leaf can stage it only through the explicit optional-app path:
+The first confirms that the floor UI stays alive without internet sockets or
+Syncthing writes. The second builds and runs the real pre-gating Jawaka client
+from commit `95de4829b1d0e494aadb4e5b5367d3d8f6a3a00c`, proves that every existing app
+still parses, and installs only the floor. The last is destructive only within
+dedicated directories on two explicitly expendable FAT cards: it proves the
+Secondary-floor refusal, committed uninstall, unique Primary real install, and
+runtime recheck with the actual disposable artifacts.
+
+The fixture feed is generated by Leaf's existing `pakrat-local-feed.py`. B4b
+does not change Pak Rat's catalog schema, generator rules, or compatibility
+client. Legacy storefront fields remain pinned to the floor, while `versions[]`
+is real-then-floor in descending order.
+
+## Staging and licensing
+
+Leaf can stage an unstamped development package only through its explicit
+optional-app path:
 
 ```sh
 make -C ../Leaf stage-app APP=Leaf-Syncthing-Pak DEVICE=mlp1 \
   REMOTE_SDCARD_PATH=/the/intended/card
 ```
 
-It remains excluded from Leaf's default stage, required bootstrap repos,
-managed app manifest, and release ZIP.
+An uncached package build downloads the locked Syncthing release archive,
+signed checksums, source offer, and release key. Verification restricts initial
+and redirect hosts, checks the pinned signer and signature, then validates every
+locked digest before packaging.
 
-An uncached targeted stage has a network precondition: `package-mlp1` downloads
-the locked Syncthing release archive, signed checksums, source offer, and release
-key. The verifier restricts initial and redirect hosts, validates the pinned
-signer fingerprint and signatures, and checks every locked digest before the
-artifact can be packaged.
-Local tests expect `../umrk-workspace`; CI checks out the explicitly pinned
-contract revision beside this repository. `make test` runs all Go packages and
-the standalone C UI-protocol fixture and semantic-client checks.
-
-The UMRK controller and packaging code are MIT licensed. The bundled upstream
-Syncthing binary remains under MPL-2.0; both notices ship in the pak.
+UMRK controller, UI, gate, and packaging code are MIT licensed. The bundled
+upstream Syncthing binary remains MPL-2.0; both notices ship in the real pak.

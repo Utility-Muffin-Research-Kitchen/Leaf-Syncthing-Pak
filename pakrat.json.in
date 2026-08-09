@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "org.umrk.syncthing",
+  "name": "Syncthing",
+  "summary": "Synchronize Leaf saves and selected folders between devices.",
+  "description": "Optional managed Syncthing service for Leaf with per-card safety, protected first sync, lifecycle coordination, and a read-only paired status gateway.",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
+  "categories": ["tools", "network"],
+  "leaf": {
+    "packages": [
+      {
+        "platform": "mlp1",
+        "version": "@PAK_VERSION@",
+        "min_leaf_version": "@MIN_LEAF_VERSION@",
+        "artifact_name": "Syncthing.mlp1.pak.zip",
+        "install_name": "Syncthing.pak",
+        "runtime_manifest_path": "pak.json",
+        "package_dir": "build/mlp1/package/Syncthing.pak",
+        "build_command": []
+      }
+    ]
+  },
+  "compat": {
+    "nextui_pak_json": "pak.json"
+  },
+  "notes": {
+    "distribution": "Pak Rat optional app; never bundled in base Leaf.",
+    "target": "mlp1"
+  }
+}

@@ -14,6 +14,7 @@ UMRK_MLP1_PROFILE_LDFLAGS ?= -Wl,--gc-sections
 endif
 
 SRC := src/main.c src/framed_socket.c src/ui_control.c src/ctl1.c third_party/qrcodegen.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
+FLOOR_SRC := src/floor_main.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
 HDR := $(wildcard include/*.h) $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h
 PKG_CONFIG ?= pkg-config
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf SDL2_image)
@@ -24,12 +25,17 @@ LDFLAGS := $(UMRK_MLP1_PROFILE_LDFLAGS) $(SDL_LIBS) -lm
 
 .PHONY: all clean
 
-all: $(BUILD_DIR)/bin/leaf-syncthing-ui
+all: $(BUILD_DIR)/bin/leaf-syncthing-ui $(BUILD_DIR)/bin/leaf-syncthing-floor
 
 $(BUILD_DIR)/bin/leaf-syncthing-ui: $(SRC) $(HDR)
 	@mkdir -p "$(BUILD_DIR)/bin"
 	$(CC) $(CFLAGS) -o "$@" $(SRC) $(LDFLAGS)
 	$(STRIP) "$@"
 
+$(BUILD_DIR)/bin/leaf-syncthing-floor: $(FLOOR_SRC) $(HDR)
+	@mkdir -p "$(BUILD_DIR)/bin"
+	$(CC) $(CFLAGS) -o "$@" $(FLOOR_SRC) $(LDFLAGS)
+	$(STRIP) "$@"
+
 clean:
-	rm -rf "$(BUILD_DIR)/bin/leaf-syncthing-ui"
+	rm -rf "$(BUILD_DIR)/bin/leaf-syncthing-ui" "$(BUILD_DIR)/bin/leaf-syncthing-floor"

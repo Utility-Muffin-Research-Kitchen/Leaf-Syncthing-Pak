@@ -6,8 +6,9 @@ WORKSPACE_ROOT ?= $(abspath ..)
 CATASTROPHE_DIR ?= $(WORKSPACE_ROOT)/Catastrophe
 MLP1_TOOLCHAIN_IMAGE ?= ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain:local
 MLP1_UI := build/mlp1/bin/leaf-syncthing-ui
+MLP1_FLOOR_UI := build/mlp1/bin/leaf-syncthing-floor
 
-.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 test test-ui-control-c test-ui-client-c clean
+.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 b4b-fixture b4b-local-smoke b4b-device-floor-smoke b4b-device-pre-gating-smoke b4b-device-transition-smoke test test-ui-control-c test-ui-client-c test-version-gate clean
 
 verify-upstream:
 	$(PYTHON) scripts/verify_upstream.py \
@@ -40,12 +41,42 @@ package-platform:
 	esac
 
 package-mlp1: verify-upstream controller-mlp1 ui-mlp1
-	$(PYTHON) scripts/package_mlp1.py
+	$(PYTHON) scripts/package_mlp1.py \
+		$(if $(PAK_VERSION),--pak-version "$(PAK_VERSION)") \
+		$(if $(MIN_LEAF_VERSION),--min-leaf-version "$(MIN_LEAF_VERSION)")
+
+package-floor-mlp1: ui-mlp1
+	@test -n "$(MIN_LEAF_VERSION)" || { echo "MIN_LEAF_VERSION is required" >&2; exit 2; }
+	$(PYTHON) scripts/package_floor.py \
+		--pak-version "$(if $(FLOOR_PAK_VERSION),$(FLOOR_PAK_VERSION),0.0.1)" \
+		--min-leaf-version "$(MIN_LEAF_VERSION)"
+
+b4b-fixture:
+	$(PYTHON) scripts/build_b4b_fixture.py \
+		--floor-version "$(if $(FLOOR_PAK_VERSION),$(FLOOR_PAK_VERSION),0.0.1)" \
+		--real-version "$(if $(PAK_VERSION),$(PAK_VERSION),0.0.2)" \
+		--min-leaf-version "$(if $(MIN_LEAF_VERSION),$(MIN_LEAF_VERSION),99.99.99)"
+
+b4b-local-smoke:
+	bash scripts/b4b-local-smoke.sh
+
+b4b-device-floor-smoke: b4b-fixture
+	bash scripts/adb-mlp1-b4b-floor-smoke.sh
+
+b4b-device-pre-gating-smoke: b4b-fixture
+	bash scripts/adb-mlp1-b4b-pre-gating-smoke.sh
+
+b4b-device-transition-smoke:
+	bash scripts/adb-mlp1-b4b-transition-smoke.sh
 
 test:
 	$(GO) test ./...
 	$(MAKE) test-ui-control-c
 	$(MAKE) test-ui-client-c
+	$(MAKE) test-version-gate
+
+test-version-gate:
+	bash scripts/leaf-version-gate-test.sh
 
 test-ui-control-c:
 	@mkdir -p build/tests
