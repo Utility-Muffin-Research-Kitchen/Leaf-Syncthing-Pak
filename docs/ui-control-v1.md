@@ -219,6 +219,9 @@ versioning. Only the offering device is included; unrelated configured peers
 are never silently added. A pending binding is flushed before the upstream add;
 startup activates it if the paused upstream folder exists or rolls it back if
 the add never happened, without deleting the live Saves/States tree.
+The foreground Folders screen shows a pending-offer count, the offering device,
+and an explicit card/content/direction review; encrypted offers are labeled as
+unsupported and cannot enter the creation flow.
 
 ## Device operations
 

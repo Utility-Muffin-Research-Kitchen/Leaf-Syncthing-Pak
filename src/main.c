@@ -32,6 +32,7 @@ typedef struct {
 
 static void ls_show_folder_actions(ls_app *app, const char *folder_id);
 static void ls_add_folder(ls_app *app);
+static void ls_show_folder_offers(ls_app *app);
 static void ls_show_devices(ls_app *app);
 static void ls_show_recovery(ls_app *app);
 static void ls_show_settings(ls_app *app);
@@ -179,9 +180,11 @@ static void ls_show_cards(ls_app *app) {
 }
 
 static void ls_show_folders(ls_app *app) {
-    cat_options_item items[LS_UI_MAX_FOLDERS + 1];
+    cat_options_item items[LS_UI_MAX_FOLDERS + 2];
     cat_option item_options[LS_UI_MAX_FOLDERS];
+    cat_option offer_option;
     char values[LS_UI_MAX_FOLDERS][128];
+    char offer_value[64];
     cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
                                 {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
     int focus = 0;
@@ -192,6 +195,7 @@ static void ls_show_folders(ls_app *app) {
         int index;
         int item_count = 0;
         int add_available;
+        int offers_available;
         int action;
         ls_refresh(app);
         if (!app->controller_available) {
@@ -199,10 +203,18 @@ static void ls_show_folders(ls_app *app) {
             return;
         }
         add_available = ls_ui_has_capability(&app->status, "folder.onboard.plan");
+        offers_available = app->status.folder_offer_count > 0 &&
+                           ls_ui_has_capability(&app->status, "folder.offer.plan");
         memset(items, 0, sizeof(items));
         memset(item_options, 0, sizeof(item_options));
         if (add_available) {
             items[item_count++] = (cat_options_item){.label = "Add managed folder", .type = CAT_OPT_CLICKABLE};
+        }
+        if (offers_available) {
+            snprintf(offer_value, sizeof(offer_value), "%d pending", app->status.folder_offer_count);
+            offer_option = (cat_option){.label = offer_value, .value = offer_value};
+            items[item_count++] = (cat_options_item){.label = "Join offered folder", .type = CAT_OPT_CLICKABLE,
+                                                     .options = &offer_option, .option_count = 1};
         }
         for (index = 0; index < app->status.folder_count; index++) {
             ls_ui_folder *folder = &app->status.folders[index];
@@ -235,8 +247,10 @@ static void ls_show_folders(ls_app *app) {
         if (result.action != CAT_ACTION_SELECTED) continue;
         if (add_available && focus == 0) {
             ls_add_folder(app);
+        } else if (offers_available && focus == (add_available ? 1 : 0)) {
+            ls_show_folder_offers(app);
         } else {
-            int folder_index = focus - (add_available ? 1 : 0);
+            int folder_index = focus - (add_available ? 1 : 0) - (offers_available ? 1 : 0);
             if (folder_index >= 0 && folder_index < app->status.folder_count) {
                 char folder_id[sizeof(app->status.folders[0].id)];
                 snprintf(folder_id, sizeof(folder_id), "%s", app->status.folders[folder_index].id);
@@ -564,37 +578,21 @@ static void ls_first_sync_flow(ls_app *app, const char *folder_id) {
     ls_message("First-sync protection is complete. Syncthing may now process this folder when no other pause reason applies.");
 }
 
-static void ls_add_folder(ls_app *app) {
-    static const char *const kind_labels[] = {"Leaf Saves (recommended)", "Leaf States (advanced)"};
-    static const char *const kind_values[] = {"saves", "states"};
-    char source_id[65];
-    const char *folder_type;
-    const char *kind;
-    const char *device_ids[LS_UI_MAX_PEERS];
-    size_t device_count = 0;
-    int kind_index;
-    int states_acknowledged = 0;
+static void ls_finish_folder_onboarding(ls_app *app, const char *source_id, const char *kind,
+                                        const char *initial_folder_type,
+                                        const char *const *device_ids, size_t device_count,
+                                        const ls_ui_folder_offer *offer,
+                                        int states_acknowledged) {
+    const char *folder_type = initial_folder_type;
     ls_ui_onboarding plan;
 
-    ls_refresh(app);
-    if (!app->controller_available || ls_choose_folder_card(app, source_id, sizeof(source_id)) != 0) return;
-    kind_index = ls_choose_labels("Choose Folder", kind_labels, 2);
-    if (kind_index < 0) return;
-    kind = kind_values[kind_index];
-    if (strcmp(kind, "states") == 0) {
-        states_acknowledged = ls_confirm(
-            "Save states depend on the emulator, core, and version. They can be unsafe or non-portable across devices. Sync States anyway?",
-            "I understand");
-        if (!states_acknowledged) return;
-    }
-    if (ls_choose_folder_peers(app, device_ids, &device_count) != 0) return;
-    folder_type = ls_choose_folder_type("Sync Direction");
-    if (!folder_type) return;
-
 review:
-    if (ls_ui_folder_onboard_plan(app->control_socket, source_id, kind, folder_type,
-                                  device_ids, device_count,
-                                  &app->status, app->error, sizeof(app->error)) != 0) {
+    if ((offer && ls_ui_folder_offer_plan(app->control_socket, offer->folder_id, offer->device_id,
+                                          source_id, kind, folder_type,
+                                          &app->status, app->error, sizeof(app->error)) != 0) ||
+        (!offer && ls_ui_folder_onboard_plan(app->control_socket, source_id, kind, folder_type,
+                                             device_ids, device_count,
+                                             &app->status, app->error, sizeof(app->error)) != 0)) {
         ls_message(app->error);
         return;
     }
@@ -628,8 +626,10 @@ review:
     if (!ls_confirm(
             "Thing-File is a general-purpose editor and is not coordinated with Syncthing. Do not manually edit this managed tree in Thing-File while Syncthing is active.",
             "I understand")) return;
-    if (!ls_confirm("Create this managed folder paused? Nothing syncs until you complete the first-sync review and explicitly start it.",
-                    "Create")) return;
+    if (!ls_confirm(plan.join_existing
+            ? "Join this offered folder paused? Nothing syncs until you complete the first-sync review and explicitly start it."
+            : "Create this managed folder paused? Nothing syncs until you complete the first-sync review and explicitly start it.",
+                    plan.join_existing ? "Join" : "Create")) return;
     if (ls_ui_folder_onboard_create(app->control_socket, plan.plan_id,
                                     states_acknowledged != 0, true,
                                     &app->status, app->error, sizeof(app->error)) != 0) {
@@ -647,6 +647,121 @@ review:
         return;
     }
     ls_first_sync_flow(app, plan.folder_id);
+}
+
+static void ls_add_folder(ls_app *app) {
+    static const char *const kind_labels[] = {"Leaf Saves (recommended)", "Leaf States (advanced)"};
+    static const char *const kind_values[] = {"saves", "states"};
+    char source_id[65];
+    const char *folder_type;
+    const char *kind;
+    const char *device_ids[LS_UI_MAX_PEERS];
+    size_t device_count = 0;
+    int kind_index;
+    int states_acknowledged = 0;
+
+    ls_refresh(app);
+    if (!app->controller_available || ls_choose_folder_card(app, source_id, sizeof(source_id)) != 0) return;
+    kind_index = ls_choose_labels("Choose Folder", kind_labels, 2);
+    if (kind_index < 0) return;
+    kind = kind_values[kind_index];
+    if (strcmp(kind, "states") == 0) {
+        states_acknowledged = ls_confirm(
+            "Save states depend on the emulator, core, and version. They can be unsafe or non-portable across devices. Sync States anyway?",
+            "I understand");
+        if (!states_acknowledged) return;
+    }
+    if (ls_choose_folder_peers(app, device_ids, &device_count) != 0) return;
+    folder_type = ls_choose_folder_type("Sync Direction");
+    if (!folder_type) return;
+    ls_finish_folder_onboarding(app, source_id, kind, folder_type,
+                                device_ids, device_count, NULL, states_acknowledged);
+}
+
+static void ls_join_folder_offer(ls_app *app, const ls_ui_folder_offer *offer) {
+    static const char *const kind_labels[] = {"Use as Leaf Saves (recommended)", "Use as Leaf States (advanced)"};
+    static const char *const kind_values[] = {"saves", "states"};
+    char source_id[65];
+    char detail[768];
+    const char *folder_type;
+    const char *kind;
+    int kind_index;
+    int states_acknowledged = 0;
+    if (!offer) return;
+    if (offer->receive_encrypted || offer->remote_encrypted) {
+        ls_message("Leaf cannot join encrypted Syncthing folder offers.");
+        return;
+    }
+    snprintf(detail, sizeof(detail),
+             "%s\nFrom: %s (...%s)\nFolder ID: %s\nOffered: %s\n\nChoose how this standard Syncthing folder maps to the selected Leaf card.",
+             offer->label, offer->device_name, offer->device_id_suffix,
+             offer->folder_id, offer->offered_at[0] ? offer->offered_at : "Unknown");
+    if (!ls_confirm(detail, "Review")) return;
+    if (ls_choose_folder_card(app, source_id, sizeof(source_id)) != 0) return;
+    kind_index = ls_choose_labels("Choose Content", kind_labels, 2);
+    if (kind_index < 0) return;
+    kind = kind_values[kind_index];
+    if (strcmp(kind, "states") == 0) {
+        states_acknowledged = ls_confirm(
+            "Save states depend on the emulator, core, and version. They can be unsafe or non-portable across devices. Sync States anyway?",
+            "I understand");
+        if (!states_acknowledged) return;
+    }
+    folder_type = ls_choose_folder_type("Local Direction");
+    if (!folder_type) return;
+    ls_finish_folder_onboarding(app, source_id, kind, folder_type,
+                                NULL, 0, offer, states_acknowledged);
+}
+
+static void ls_show_folder_offers(ls_app *app) {
+    int focus = 0;
+    int scroll = 0;
+    for (;;) {
+        cat_options_item items[LS_UI_MAX_FOLDER_OFFERS];
+        cat_option values[LS_UI_MAX_FOLDER_OFFERS];
+        char value_text[LS_UI_MAX_FOLDER_OFFERS][128];
+        cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
+                                    {.button = CAT_BTN_A, .label = "Review", .is_confirm = true}};
+        cat_options_list_opts options = {0};
+        cat_options_list_result result = {0};
+        int index;
+        int action;
+        ls_refresh(app);
+        if (!app->controller_available) {
+            ls_message(app->error);
+            return;
+        }
+        if (app->status.folder_offer_count == 0) {
+            ls_message("No pending folder offers remain.");
+            return;
+        }
+        memset(items, 0, sizeof(items));
+        memset(values, 0, sizeof(values));
+        for (index = 0; index < app->status.folder_offer_count; index++) {
+            ls_ui_folder_offer *offer = &app->status.folder_offers[index];
+            snprintf(value_text[index], sizeof(value_text[index]), "%s%s · ...%s",
+                     offer->receive_encrypted || offer->remote_encrypted ? "Unsupported encryption · " : "",
+                     offer->device_name, offer->device_id_suffix);
+            values[index] = (cat_option){.label = value_text[index], .value = value_text[index]};
+            items[index] = (cat_options_item){.label = offer->label, .type = CAT_OPT_CLICKABLE,
+                                              .options = &values[index], .option_count = 1};
+        }
+        options.title = "Folder Offers";
+        options.items = items;
+        options.item_count = app->status.folder_offer_count;
+        options.footer = footer;
+        options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+        options.initial_selected_index = focus < app->status.folder_offer_count ? focus : 0;
+        options.visible_start_index = scroll;
+        action = cat_options_list(&options, &result);
+        focus = result.focused_index;
+        scroll = result.visible_start_index;
+        if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
+        if (result.action == CAT_ACTION_SELECTED && focus >= 0 && focus < app->status.folder_offer_count) {
+            ls_ui_folder_offer offer = app->status.folder_offers[focus];
+            ls_join_folder_offer(app, &offer);
+        }
+    }
 }
 
 static void ls_show_folder_history(ls_app *app, const ls_ui_folder *folder) {
@@ -1569,7 +1684,11 @@ static void ls_run_overview(ls_app *app) {
             .type = CAT_OPT_CLICKABLE};
         if (app->controller_available) {
             snprintf(card_value, sizeof(card_value), "%d", app->status.card_count);
-            snprintf(folder_value, sizeof(folder_value), "%d", app->status.folder_count);
+            if (app->status.folder_offer_count > 0)
+                snprintf(folder_value, sizeof(folder_value), "%d · %d offers",
+                         app->status.folder_count, app->status.folder_offer_count);
+            else
+                snprintf(folder_value, sizeof(folder_value), "%d", app->status.folder_count);
             snprintf(peer_value, sizeof(peer_value), "%d", app->status.peer_count);
             snprintf(issue_value, sizeof(issue_value), "%d", app->status.issue_count);
             if (app->status.transfer_present) {
