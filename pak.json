@@ -1,0 +1,9 @@
+{
+  "name": "Syncthing (B0a qualification)",
+  "platform": "mlp1",
+  "pak_version": "0.0.0-b0a",
+  "min_jawaka_version": "0.5.5",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
+  "description": "Non-production B0a qualification package for the pinned Syncthing runtime."
+}
