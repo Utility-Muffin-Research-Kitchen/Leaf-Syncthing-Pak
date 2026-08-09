@@ -58,22 +58,23 @@ type Response struct {
 }
 
 type Status struct {
-	Controller   string             `json:"controller"`
-	Upstream     UpstreamStatus     `json:"upstream"`
-	Game         GameStatus         `json:"game"`
-	Recovery     RecoveryStatus     `json:"recovery"`
-	Network      *NetworkStatus     `json:"network,omitempty"`
-	Gateway      *GatewayStatus     `json:"gateway,omitempty"`
-	Transfer     *TransferStatus    `json:"transfer,omitempty"`
-	Logging      *LoggingStatus     `json:"logging,omitempty"`
-	Storage      *StorageStatus     `json:"storage,omitempty"`
-	Diagnostics  *DiagnosticsStatus `json:"diagnostics,omitempty"`
-	Onboarding   *OnboardingStatus  `json:"onboarding,omitempty"`
-	Cards        []CardStatus       `json:"cards"`
-	Folders      []FolderStatus     `json:"folders"`
-	Peers        []PeerStatus       `json:"peers,omitempty"`
-	Issues       []Issue            `json:"issues"`
-	Capabilities []string           `json:"capabilities"`
+	Controller   string              `json:"controller"`
+	Upstream     UpstreamStatus      `json:"upstream"`
+	Game         GameStatus          `json:"game"`
+	Recovery     RecoveryStatus      `json:"recovery"`
+	Network      *NetworkStatus      `json:"network,omitempty"`
+	Gateway      *GatewayStatus      `json:"gateway,omitempty"`
+	Transfer     *TransferStatus     `json:"transfer,omitempty"`
+	Logging      *LoggingStatus      `json:"logging,omitempty"`
+	Storage      *StorageStatus      `json:"storage,omitempty"`
+	Diagnostics  *DiagnosticsStatus  `json:"diagnostics,omitempty"`
+	Onboarding   *OnboardingStatus   `json:"onboarding,omitempty"`
+	Cards        []CardStatus        `json:"cards"`
+	Folders      []FolderStatus      `json:"folders"`
+	Peers        []PeerStatus        `json:"peers,omitempty"`
+	FolderOffers []FolderOfferStatus `json:"folder_offers,omitempty"`
+	Issues       []Issue             `json:"issues"`
+	Capabilities []string            `json:"capabilities"`
 }
 
 type NetworkStatus struct {
@@ -224,6 +225,17 @@ type PeerStatus struct {
 	Introducer   bool   `json:"introducer"`
 	IntroducedBy string `json:"introduced_by"`
 	Pending      bool   `json:"pending"`
+}
+
+type FolderOfferStatus struct {
+	FolderID         string `json:"folder_id"`
+	Label            string `json:"label"`
+	DeviceID         string `json:"device_id"`
+	DeviceIDSuffix   string `json:"device_id_suffix"`
+	DeviceName       string `json:"device_name"`
+	OfferedAt        string `json:"offered_at"`
+	ReceiveEncrypted bool   `json:"receive_encrypted"`
+	RemoteEncrypted  bool   `json:"remote_encrypted"`
 }
 
 type Issue struct {
@@ -791,6 +803,9 @@ func (status *Status) normalize() {
 	if status.Peers != nil {
 		status.Peers = append([]PeerStatus(nil), status.Peers...)
 	}
+	if status.FolderOffers != nil {
+		status.FolderOffers = append([]FolderOfferStatus(nil), status.FolderOffers...)
+	}
 	if status.Recovery.RemovePaths != nil {
 		status.Recovery.RemovePaths = append([]string(nil), status.Recovery.RemovePaths...)
 	}
@@ -882,7 +897,7 @@ func (status Status) validate() error {
 	if status.Upstream.State == "running" && (status.Upstream.Version == "" || status.Upstream.DeviceID == "") {
 		return errors.New("incomplete running status")
 	}
-	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Peers) > 128 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
+	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Peers) > 128 || len(status.FolderOffers) > 32 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
 		return errors.New("status exceeds row limits")
 	}
 	for _, card := range status.Cards {
@@ -914,6 +929,13 @@ func (status Status) validate() error {
 		if peer.ID == "" || peer.Name == "" || !oneOf(peer.State, "offline", "connected", "paused", "pending") ||
 			!oneOf(peer.Connection, "none", "local", "direct", "relay") {
 			return errors.New("peer status is outside protocol bounds")
+		}
+	}
+	for _, offer := range status.FolderOffers {
+		if !validIdentifier(offer.FolderID) || !validDisplayText(offer.Label, 96) ||
+			offer.DeviceID == "" || offer.DeviceIDSuffix == "" || !validDisplayText(offer.DeviceName, 64) ||
+			len(offer.OfferedAt) > 64 {
+			return errors.New("folder offer is outside protocol bounds")
 		}
 	}
 	return nil

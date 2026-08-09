@@ -71,6 +71,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *cards;
     const cJSON *folders;
     const cJSON *peers;
+    const cJSON *folder_offers;
     const cJSON *issues;
     const cJSON *capabilities;
     const cJSON *value;
@@ -282,11 +283,13 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
     folders = cJSON_GetObjectItemCaseSensitive(result, "folders");
     peers = cJSON_GetObjectItemCaseSensitive(result, "peers");
+    folder_offers = cJSON_GetObjectItemCaseSensitive(result, "folder_offers");
     issues = cJSON_GetObjectItemCaseSensitive(result, "issues");
     capabilities = cJSON_GetObjectItemCaseSensitive(result, "capabilities");
     if (!cJSON_IsArray(cards) || cJSON_GetArraySize(cards) > LS_UI_MAX_CARDS ||
         !cJSON_IsArray(folders) || cJSON_GetArraySize(folders) > LS_UI_MAX_FOLDERS ||
         (peers && (!cJSON_IsArray(peers) || cJSON_GetArraySize(peers) > LS_UI_MAX_PEERS)) ||
+        (folder_offers && (!cJSON_IsArray(folder_offers) || cJSON_GetArraySize(folder_offers) > LS_UI_MAX_FOLDER_OFFERS)) ||
         !cJSON_IsArray(issues) || cJSON_GetArraySize(issues) > LS_UI_MAX_ISSUES ||
         !cJSON_IsArray(capabilities) || cJSON_GetArraySize(capabilities) > LS_UI_MAX_CAPABILITIES) return -1;
 
@@ -339,6 +342,27 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
             value = cJSON_GetObjectItemCaseSensitive(item, "pending");
             if (!cJSON_IsBool(value)) return -1;
             peer->pending = cJSON_IsTrue(value);
+        }
+    }
+
+    if (folder_offers) {
+        status->folder_offer_count = cJSON_GetArraySize(folder_offers);
+        for (index = 0; index < status->folder_offer_count; index++) {
+            const cJSON *item = cJSON_GetArrayItem(folder_offers, index);
+            ls_ui_folder_offer *offer = &status->folder_offers[index];
+            if (!cJSON_IsObject(item) ||
+                ls_copy_json(offer->folder_id, sizeof(offer->folder_id), cJSON_GetObjectItemCaseSensitive(item, "folder_id")) != 0 ||
+                ls_copy_json(offer->label, sizeof(offer->label), cJSON_GetObjectItemCaseSensitive(item, "label")) != 0 ||
+                ls_copy_json(offer->device_id, sizeof(offer->device_id), cJSON_GetObjectItemCaseSensitive(item, "device_id")) != 0 ||
+                ls_copy_json(offer->device_id_suffix, sizeof(offer->device_id_suffix), cJSON_GetObjectItemCaseSensitive(item, "device_id_suffix")) != 0 ||
+                ls_copy_json(offer->device_name, sizeof(offer->device_name), cJSON_GetObjectItemCaseSensitive(item, "device_name")) != 0 ||
+                ls_copy_json(offer->offered_at, sizeof(offer->offered_at), cJSON_GetObjectItemCaseSensitive(item, "offered_at")) != 0) return -1;
+            value = cJSON_GetObjectItemCaseSensitive(item, "receive_encrypted");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->receive_encrypted = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "remote_encrypted");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->remote_encrypted = cJSON_IsTrue(value);
         }
     }
 

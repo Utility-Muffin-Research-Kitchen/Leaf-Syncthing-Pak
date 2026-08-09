@@ -53,6 +53,15 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 			Introducer: peer.Introducer, IntroducedBy: peer.IntroducedBy, Pending: peer.Pending,
 		})
 	}
+	status.FolderOffers = make([]uicontrol.FolderOfferStatus, 0, len(live.FolderOffers))
+	for _, offer := range live.FolderOffers {
+		status.FolderOffers = append(status.FolderOffers, uicontrol.FolderOfferStatus{
+			FolderID: offer.FolderID, Label: offer.Label, DeviceID: offer.DeviceID,
+			DeviceIDSuffix: deviceIDSuffix(offer.DeviceID), DeviceName: offer.DeviceName,
+			OfferedAt: offer.OfferedAt, ReceiveEncrypted: offer.ReceiveEncrypted,
+			RemoteEncrypted: offer.RemoteEncrypted,
+		})
+	}
 	status.Transfer = &uicontrol.TransferStatus{
 		State: live.Transfer.State, LocalBytes: live.Transfer.LocalBytes,
 		GlobalBytes: live.Transfer.GlobalBytes, NeedBytes: live.Transfer.NeedBytes,

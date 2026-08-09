@@ -78,6 +78,7 @@ diagnostics                        last fixed-path redacted export, if any
 cards[]                            enrolled/configured physical-card rows
 folders[]                          managed-folder rows
 peers[]                            configured and pending peers with connection kind
+folder_offers[]                    pending standard Syncthing folder announcements
 issues[]                           display-safe controller/card/folder issues
 capabilities[]                     supported operation names
 ```
@@ -88,7 +89,10 @@ duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
 identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
 versioning, an optional bounded conflict list, and scoped issues. Peer rows
 distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
-explicit and are never accepted by a status read. Counts and byte sizes are
+explicit and are never accepted by a status read. Folder-offer rows include
+the network folder ID and label, offering device ID/name, offer time, and
+encryption flags; status remains read-only and exposes at most 32 offers.
+Counts and byte sizes are
 non-negative; an empty timestamp is unknown. B3 still owns onboarding and
 first-sync release, so a strict pre-existing Leaf binding remains paused for
 `first-sync` until that phase's durable flow completes.

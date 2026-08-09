@@ -20,6 +20,7 @@ func TestReadUIStatusReturnsBoundedFoldersPeersAndTransfer(t *testing.T) {
 		"GET /rest/config/devices":                               `[{"deviceID":"SELF","name":"Leaf"},{"deviceID":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}]`,
 		"GET /rest/system/connections":                           `{"connections":{"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH":{"connected":true,"address":"tcp://192.0.2.2:22000","type":"tcp-client","isLocal":true,"inBytesTotal":10,"outBytesTotal":20}}}`,
 		"GET /rest/cluster/pending/devices":                      `{"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP":{"name":"Introduced"}}`,
+		"GET /rest/cluster/pending/folders":                      `{"retro-saves":{"offeredBy":{"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH":{"time":"2026-08-09T12:34:56.123Z","label":"Retro Saves","receiveEncrypted":false,"remoteEncrypted":false}}}}`,
 		"GET /rest/stats/folder":                                 `{"leaf-saves-0011223344556677":{"lastFile":{"at":"2026-08-08T10:00:00Z"}}}`,
 		"GET /rest/db/status?folder=leaf-saves-0011223344556677": `{"state":"syncing","localBytes":100,"globalBytes":140,"needBytes":40,"errors":0,"pullErrors":0}`,
 	})
@@ -30,7 +31,9 @@ func TestReadUIStatusReturnsBoundedFoldersPeersAndTransfer(t *testing.T) {
 	}
 	if status.Transfer.State != "syncing" || status.Transfer.NeedBytes != 40 || len(status.Peers) != 2 ||
 		status.Peers[0].State != "pending" || status.Peers[1].Connection != "local" ||
-		status.Folders["leaf-saves-0011223344556677"].LastActivity != "2026-08-08T10:00:00Z" {
+		status.Folders["leaf-saves-0011223344556677"].LastActivity != "2026-08-08T10:00:00Z" ||
+		len(status.FolderOffers) != 1 || status.FolderOffers[0].FolderID != "retro-saves" ||
+		status.FolderOffers[0].DeviceName != "Laptop" || status.FolderOffers[0].OfferedAt != "2026-08-09T12:34:56Z" {
 		t.Fatalf("UI status = %+v", status)
 	}
 }

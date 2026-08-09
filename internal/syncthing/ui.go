@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	maxPeerName   = 64
-	maxFolderName = 96
+	maxPeerName     = 64
+	maxFolderName   = 96
+	maxFolderOffers = 32
 )
 
 type UIFolderStatus struct {
@@ -50,10 +51,21 @@ type UITransferStatus struct {
 	OutBytes    int64
 }
 
+type UIFolderOffer struct {
+	FolderID         string
+	Label            string
+	DeviceID         string
+	DeviceName       string
+	OfferedAt        string
+	ReceiveEncrypted bool
+	RemoteEncrypted  bool
+}
+
 type UIStatus struct {
-	Folders  map[string]UIFolderStatus
-	Peers    []UIPeerStatus
-	Transfer UITransferStatus
+	Folders      map[string]UIFolderStatus
+	Peers        []UIPeerStatus
+	FolderOffers []UIFolderOffer
+	Transfer     UITransferStatus
 }
 
 type uiDevice struct {
@@ -102,6 +114,15 @@ type uiPendingDevice struct {
 	Name string `json:"name"`
 }
 
+type uiPendingFolder struct {
+	OfferedBy map[string]struct {
+		Time             string `json:"time"`
+		Label            string `json:"label"`
+		ReceiveEncrypted bool   `json:"receiveEncrypted"`
+		RemoteEncrypted  bool   `json:"remoteEncrypted"`
+	} `json:"offeredBy"`
+}
+
 // ReadUIStatus returns only bounded, display-safe data used by the C client.
 // It deliberately does not return upstream config objects or secrets.
 func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFolder, selfDeviceID string) (UIStatus, error) {
@@ -116,6 +137,10 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 	}
 	var pending map[string]uiPendingDevice
 	if err := process.apiJSON(ctx, http.MethodGet, "/rest/cluster/pending/devices", nil, &pending); err != nil {
+		return UIStatus{}, err
+	}
+	var pendingFolders map[string]uiPendingFolder
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/cluster/pending/folders", nil, &pendingFolders); err != nil {
 		return UIStatus{}, err
 	}
 	var stats uiFolderStats
@@ -187,7 +212,55 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		}
 		return status.Peers[left].Name < status.Peers[right].Name
 	})
+	peerNames := make(map[string]string, len(status.Peers))
+	for _, peer := range status.Peers {
+		peerNames[peer.ID] = peer.Name
+	}
+	folderIDs := make([]string, 0, len(pendingFolders))
+	for folderID := range pendingFolders {
+		folderIDs = append(folderIDs, folderID)
+	}
+	sort.Strings(folderIDs)
+	for _, folderID := range folderIDs {
+		if !ValidFolderID(folderID) {
+			continue
+		}
+		deviceIDs := make([]string, 0, len(pendingFolders[folderID].OfferedBy))
+		for deviceID := range pendingFolders[folderID].OfferedBy {
+			deviceIDs = append(deviceIDs, deviceID)
+		}
+		sort.Strings(deviceIDs)
+		for _, deviceID := range deviceIDs {
+			normalized, err := NormalizeDeviceID(deviceID)
+			if err != nil || normalized == selfDeviceID || len(status.FolderOffers) >= maxFolderOffers {
+				continue
+			}
+			offer := pendingFolders[folderID].OfferedBy[deviceID]
+			status.FolderOffers = append(status.FolderOffers, UIFolderOffer{
+				FolderID: folderID, Label: displayFolderLabel(offer.Label, folderID),
+				DeviceID: normalized, DeviceName: displayPeerName(peerNames[normalized], normalized),
+				OfferedAt: boundedOfferTime(offer.Time), ReceiveEncrypted: offer.ReceiveEncrypted,
+				RemoteEncrypted: offer.RemoteEncrypted,
+			})
+		}
+	}
 	return status, nil
+}
+
+func displayFolderLabel(label, folderID string) string {
+	label = strings.TrimSpace(label)
+	if validDisplayName(label, maxFolderName) {
+		return label
+	}
+	return "Shared folder " + folderID
+}
+
+func boundedOfferTime(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 func boundedItemTotal(values ...int) int {
