@@ -14,8 +14,6 @@ elif [ -n "${SDCARD_PATH:-}" ] &&
 fi
 
 SDCARD_PATH=${SDCARD_PATH:-/mnt/sdcard}
-USERDATA_PATH=${USERDATA_PATH:-$SDCARD_PATH/.userdata/$PLATFORM}
-LOGS_PATH=${LOGS_PATH:-$USERDATA_PATH/logs}
 # shellcheck source=lib/leaf-version-gate.sh
 . "$PAK_DIR/lib/leaf-version-gate.sh"
 
@@ -25,12 +23,10 @@ leaf_version_gate_manifest "$PAK_DIR/pak.json" \
 case "$gate_status" in
     0|2) ;;
     *)
-        exec "$PAK_DIR/bin/leaf-syncthing-floor" \
-            "${LEAF_REQUIRED_VERSION:-Invalid}" \
-            "${LEAF_INSTALLED_VERSION:-Unknown}"
+        echo "leaf-syncthing: refusing to start: $LEAF_VERSION_GATE_REASON" >&2
+        echo "leaf-syncthing: installed=$LEAF_INSTALLED_VERSION required=$LEAF_REQUIRED_VERSION" >&2
+        exit 64
         ;;
 esac
 
-mkdir -p "$LOGS_PATH"
-
-exec "$PAK_DIR/bin/leaf-syncthing-ui"
+exec "$PAK_DIR/bin/leaf-syncthing" service run

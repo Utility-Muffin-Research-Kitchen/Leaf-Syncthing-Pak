@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Assemble the non-production B3 MLP1 controller and UI package."""
+"""Assemble the MLP1 controller and UI package."""
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import tarfile
@@ -16,6 +18,15 @@ LOCK_PATH = ROOT / "upstream" / "syncthing-v2.1.2.lock.json"
 UPSTREAM_DIR = ROOT / "workdir" / "upstream" / "v2.1.2"
 PACKAGE_DIR = ROOT / "build" / "mlp1" / "package" / "Syncthing.pak"
 ARCHIVE_PATH = ROOT / "build" / "mlp1" / "Syncthing.mlp1.pak.zip"
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+
+
+def package_version(value: str) -> str:
+    if not VERSION_RE.fullmatch(value) or any(
+        int(component) > 9999 for component in value.split(".")
+    ):
+        raise argparse.ArgumentTypeError("must be an exact MAJOR.MINOR.PATCH")
+    return value
 
 
 def copy_archive_member(package: tarfile.TarFile, name: str, target: Path) -> None:
@@ -32,12 +43,20 @@ def copy_archive_member(package: tarfile.TarFile, name: str, target: Path) -> No
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pak-version", type=package_version)
+    parser.add_argument("--min-leaf-version", type=package_version)
+    args = parser.parse_args()
+    if (args.pak_version is None) != (args.min_leaf_version is None):
+        parser.error("--pak-version and --min-leaf-version must be supplied together")
+
     lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
     version = lock["version"]
     binary_archive = UPSTREAM_DIR / lock["binary"]["name"]
     controller = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing"
     ui = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing-ui"
-    if not binary_archive.is_file() or not controller.is_file() or not ui.is_file():
+    floor = ROOT / "build" / "mlp1" / "bin" / "leaf-syncthing-floor"
+    if not all(path.is_file() for path in (binary_archive, controller, ui, floor)):
         raise SystemExit("verified upstream, controller, or device UI binary is missing")
 
     if PACKAGE_DIR.parent.exists():
@@ -50,12 +69,34 @@ def main() -> None:
 
     shutil.copy2(controller, PACKAGE_DIR / "bin" / "leaf-syncthing")
     shutil.copy2(ui, PACKAGE_DIR / "bin" / "leaf-syncthing-ui")
+    shutil.copy2(floor, PACKAGE_DIR / "bin" / "leaf-syncthing-floor")
     shutil.copy2(ROOT / "launch.sh", PACKAGE_DIR / "launch.sh")
-    shutil.copy2(ROOT / "pak.json", PACKAGE_DIR / "pak.json")
+    shutil.copy2(ROOT / "service.sh", PACKAGE_DIR / "service.sh")
+    (PACKAGE_DIR / "lib").mkdir()
+    shutil.copy2(
+        ROOT / "lib" / "leaf-version-gate.sh",
+        PACKAGE_DIR / "lib" / "leaf-version-gate.sh",
+    )
+    manifest = json.loads((ROOT / "pak.json").read_text(encoding="utf-8"))
+    if args.pak_version is not None:
+        manifest["name"] = "Syncthing"
+        manifest["description"] = "Optional managed Syncthing service for Leaf."
+        manifest["pak_version"] = args.pak_version
+        manifest["min_leaf_version"] = args.min_leaf_version
+    (PACKAGE_DIR / "pak.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
     shutil.copy2(ROOT / "LICENSE", PACKAGE_DIR / "licenses" / "Leaf-Syncthing-Pak-MIT.txt")
     shutil.copy2(ROOT / "third_party" / "qrcodegen.LICENSE", PACKAGE_DIR / "licenses" / "qrcodegen-MIT.txt")
     shutil.copy2(LOCK_PATH, PACKAGE_DIR / "licenses" / LOCK_PATH.name)
-    for executable in (PACKAGE_DIR / "launch.sh", PACKAGE_DIR / "bin" / "syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing", PACKAGE_DIR / "bin" / "leaf-syncthing-ui"):
+    for executable in (
+        PACKAGE_DIR / "launch.sh",
+        PACKAGE_DIR / "service.sh",
+        PACKAGE_DIR / "bin" / "syncthing",
+        PACKAGE_DIR / "bin" / "leaf-syncthing",
+        PACKAGE_DIR / "bin" / "leaf-syncthing-ui",
+        PACKAGE_DIR / "bin" / "leaf-syncthing-floor",
+    ):
         executable.chmod(0o755)
 
     if ARCHIVE_PATH.exists():
