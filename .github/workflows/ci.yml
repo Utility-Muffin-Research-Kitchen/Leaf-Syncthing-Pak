@@ -25,6 +25,13 @@ jobs:
           ssh-key: ${{ secrets.UMRK_WORKSPACE_DEPLOY_KEY }}
           path: umrk-workspace
 
+      - name: Check out pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: e1ddd5dcb1d0f4d37df1db811e7133a2f53109a7
+          path: Catastrophe
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
