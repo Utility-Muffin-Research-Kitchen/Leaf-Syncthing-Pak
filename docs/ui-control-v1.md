@@ -165,8 +165,11 @@ changes also close it.
 
 ## Folder operations
 
-All folder ids must name an existing strict Leaf binding. The UI never sends a
-path, and the controller never exposes a free-form path mutation.
+All folder ids must name an existing controller-registered Leaf binding. The
+network id may have been created by Leaf or offered by a standard Syncthing
+peer; its durable binding separately identifies the enrolled card, content
+kind, and local safety marker. The UI never sends a path, and the controller
+never exposes a free-form path mutation.
 
 ```json
 {"v":1,"id":"folder-inspect","op":"folder.inspect","args":{"folder_id":"leaf-saves-0011223344556677"}}

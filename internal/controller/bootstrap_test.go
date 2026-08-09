@@ -194,6 +194,12 @@ func TestBootstrapQueriesLifecycleBeforeConfigRecovery(t *testing.T) {
 
 func TestBootstrapForcesManagedFoldersPausedBeforeSpawn(t *testing.T) {
 	config := testConfig(t)
+	card := cards.Card{Identity: cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"}}
+	folderID, markerName, err := cards.BindingNames(card.Identity.ID, "saves")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder := syncthingconfig.ConfiguredFolder{ID: folderID, Kind: "saves", MarkerName: markerName}
 	runner := Runner{
 		Config: config,
 		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
@@ -201,11 +207,11 @@ func TestBootstrapForcesManagedFoldersPausedBeforeSpawn(t *testing.T) {
 		},
 		EnsureIdentity: successfulIdentity,
 		LoadFolders: func(string) ([]syncthingconfig.ConfiguredFolder, error) {
-			return []syncthingconfig.ConfiguredFolder{{ID: "leaf-saves-0011223344556677", Kind: "saves"}}, nil
+			return []syncthingconfig.ConfiguredFolder{folder}, nil
 		},
-		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) { return nil, nil },
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) { return []cards.Card{card}, nil },
 		ApplyPause: func(_ string, desired map[string]bool, _ syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error) {
-			if len(desired) != 1 || !desired["leaf-saves-0011223344556677"] {
+			if len(desired) != 1 || !desired[folderID] {
 				t.Fatalf("offline pause set = %#v", desired)
 			}
 			return syncthingconfig.PauseEditResult{Changed: true}, nil
@@ -218,6 +224,75 @@ func TestBootstrapForcesManagedFoldersPausedBeforeSpawn(t *testing.T) {
 	defer session.Close()
 	if len(session.Folders) != 1 || !session.Folders[0].Paused || !session.PauseEdit.Changed {
 		t.Fatalf("managed folder session = %+v", session)
+	}
+}
+
+func TestBootstrapLoadsExternalFolderIDFromDurableBinding(t *testing.T) {
+	config := testConfig(t)
+	cardID := "00112233445566778899aabbccddeeff"
+	_, markerName, err := cards.BindingNames(cardID, "saves")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saves := filepath.Join(config.Sources[0].Root, "Saves")
+	if err := os.MkdirAll(filepath.Join(saves, markerName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources[0].SavesPath = saves
+	config.Sources[0].StatesPath = filepath.Join(config.Sources[0].Root, "States")
+	card := cards.Card{
+		Source: config.Sources[0], Identity: cards.Identity{Version: 1, ID: cardID},
+		State: cards.StateEnrolled, Present: true, Writable: true,
+	}
+	folder := syncthingconfig.ConfiguredFolder{
+		ID: "retro-saves", Label: "Retro Saves", Kind: "saves", Path: saves,
+		Type: "sendonly", MarkerName: markerName, Paused: true,
+	}
+	controlPath := filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
+	controls, err := newFolderControlStore(controlPath, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controls.Add(folder, card); err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{
+		Config: config,
+		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		EnsureIdentity: func(ctx context.Context, options syncthingconfig.IdentityOptions, recovery syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+			identity, err := successfulIdentity(ctx, options, recovery)
+			if err != nil {
+				return syncthingconfig.Identity{}, err
+			}
+			contents := `<configuration version="52">` +
+				`<folder id="retro-saves" label="Retro Saves" path="` + saves + `" type="sendonly">` +
+				`<paused>false</paused><markerName>` + markerName + `</markerName></folder>` +
+				`<folder id="leaf-saves-not-a-binding" path="/unmanaged"></folder>` +
+				`</configuration>`
+			if err := os.WriteFile(filepath.Join(options.ConfigDir, "config.xml"), []byte(contents), 0o600); err != nil {
+				return syncthingconfig.Identity{}, err
+			}
+			return identity, nil
+		},
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) {
+			return []cards.Card{card}, nil
+		},
+		ApplyPause: func(_ string, desired map[string]bool, _ syncthingconfig.SyncFilesystemFunc) (syncthingconfig.PauseEditResult, error) {
+			if len(desired) != 1 || !desired[folder.ID] {
+				t.Fatalf("external offline pause set = %#v", desired)
+			}
+			return syncthingconfig.PauseEditResult{Changed: true}, nil
+		},
+	}
+	session, err := runner.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if len(session.Folders) != 1 || session.Folders[0].ID != folder.ID || session.Folders[0].Kind != "saves" || !session.Folders[0].Paused {
+		t.Fatalf("external managed folder session = %+v", session.Folders)
 	}
 }
 
@@ -252,7 +327,7 @@ func TestBootstrapOfflinePauseFollowsDurableFirstSyncAndCardSafety(t *testing.T)
 				Type: "sendonly", MarkerName: marker, Paused: true,
 			}
 			controlPath := filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
-			controls, err := newFolderControlStore(controlPath, []syncthingconfig.ConfiguredFolder{folder})
+			controls, err := newFolderControlStore(controlPath, []syncthingconfig.ConfiguredFolder{folder}, []cards.Card{card})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -46,7 +46,7 @@ func TestUIActionsValidateAndConstrainUpstreamMutations(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
 	})
 	process := &Process{client: &http.Client{Transport: transport}, apiKey: "secret"}
-	folderID := "leaf-saves-0011223344556677"
+	folderID := "retro-saves"
 	deviceID := "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
 	if err := process.SetFolderPaused(context.Background(), folderID, true); err != nil {
 		t.Fatal(err)

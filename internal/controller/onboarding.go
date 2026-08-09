@@ -186,10 +186,14 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 		folder.VersioningFSPath = plan.VersioningPath
 		folder.VersioningFSType = "basic"
 	}
-	if err := validateFirstSyncBinding(folder, card); err != nil {
+	binding, err := newFolderControlRecord(folder, card)
+	if err != nil {
 		return syncthing.ConfiguredFolder{}, err
 	}
-	if err := controls.Add(folder.ID); err != nil {
+	if err := validateFirstSyncBinding(folder, card, binding); err != nil {
+		return syncthing.ConfiguredFolder{}, err
+	}
+	if err := controls.Add(folder, card); err != nil {
 		return syncthing.ConfiguredFolder{}, err
 	}
 	if err := upstream.AddManagedFolder(ctx, folder); err != nil {

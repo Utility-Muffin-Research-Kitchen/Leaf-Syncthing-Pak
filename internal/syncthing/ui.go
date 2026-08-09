@@ -204,7 +204,7 @@ func boundedItemTotal(values ...int) int {
 }
 
 func (process *Process) SetFolderPaused(ctx context.Context, folderID string, paused bool) error {
-	if !managedFolderIDPattern.MatchString(folderID) {
+	if !ValidFolderID(folderID) {
 		return errors.New("invalid managed folder id")
 	}
 	path := "/rest/config/folders/" + url.PathEscape(folderID)
@@ -215,7 +215,7 @@ func (process *Process) SetFolderPaused(ctx context.Context, folderID string, pa
 }
 
 func (process *Process) RescanFolder(ctx context.Context, folderID string) error {
-	if !managedFolderIDPattern.MatchString(folderID) {
+	if !ValidFolderID(folderID) {
 		return errors.New("invalid managed folder id")
 	}
 	path := "/rest/db/scan?" + url.Values{"folder": []string{folderID}}.Encode()
@@ -227,7 +227,7 @@ func (process *Process) RescanFolder(ctx context.Context, folderID string) error
 
 func (process *Process) RenameFolder(ctx context.Context, folderID, label string) error {
 	label = strings.TrimSpace(label)
-	if !managedFolderIDPattern.MatchString(folderID) || !validDisplayName(label, maxFolderName) {
+	if !ValidFolderID(folderID) || !validDisplayName(label, maxFolderName) {
 		return errors.New("invalid managed folder label")
 	}
 	path := "/rest/config/folders/" + url.PathEscape(folderID)

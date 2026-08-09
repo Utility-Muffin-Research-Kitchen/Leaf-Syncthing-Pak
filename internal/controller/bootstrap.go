@@ -182,23 +182,26 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("ensure upstream identity: %w", err)
 	}
-	loadFolders := runner.LoadFolders
-	if loadFolders == nil {
-		loadFolders = syncthingconfig.ReadManagedFolders
-	}
-	folders, err := loadFolders(runner.Config.ConfigDir)
-	if err != nil {
-		_ = lifecycle.Close()
-		return nil, fmt.Errorf("read managed folders: %w", err)
-	}
 	controlPath := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
-	folderControls, err := newFolderControlStore(controlPath, folders)
+	storedControls, controlSchema, _, err := readFolderControlState(controlPath)
 	if err != nil {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("load folder control state: %w", err)
 	}
+	legacyFolders := []syncthingconfig.ConfiguredFolder{}
+	if runner.LoadFolders != nil || controlSchema != 2 {
+		loadFolders := runner.LoadFolders
+		if loadFolders == nil {
+			loadFolders = syncthingconfig.ReadManagedFolders
+		}
+		legacyFolders, err = loadFolders(runner.Config.ConfigDir)
+		if err != nil {
+			_ = lifecycle.Close()
+			return nil, fmt.Errorf("read managed folders: %w", err)
+		}
+	}
 	inventory := []cards.Card{}
-	if len(folders) > 0 {
+	if len(legacyFolders) > 0 || len(storedControls) > 0 {
 		loadCards := runner.LoadCards
 		if loadCards == nil {
 			loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
@@ -214,6 +217,19 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		if err != nil {
 			_ = lifecycle.Close()
 			return nil, fmt.Errorf("verify cards before offline pause: %w", err)
+		}
+	}
+	folderControls, err := newFolderControlStore(controlPath, legacyFolders, inventory)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("load folder control state: %w", err)
+	}
+	folders := legacyFolders
+	if runner.LoadFolders == nil {
+		folders, err = syncthingconfig.ReadManagedFoldersForBindings(runner.Config.ConfigDir, folderControls.BindingKinds())
+		if err != nil {
+			_ = lifecycle.Close()
+			return nil, fmt.Errorf("read bound managed folders: %w", err)
 		}
 	}
 	firstSync, err := newFirstSyncManager(folders, inventory, folderControls, runner.FirstSyncOptions)

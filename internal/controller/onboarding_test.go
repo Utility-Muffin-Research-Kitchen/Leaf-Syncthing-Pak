@@ -42,7 +42,7 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	controlPath := filepath.Join(t.TempDir(), folderControlStateName)
-	controls, err := newFolderControlStore(controlPath, nil)
+	controls, err := newFolderControlStore(controlPath, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestFolderOnboardingRefusesReceiveFolderWithoutCurrentSnapshotSpace(t *test
 	if err := os.Remove(filepath.Join(fixture.folder.Path, fixture.folder.MarkerName)); err != nil {
 		t.Fatal(err)
 	}
-	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil)
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestFolderOnboardingRechecksSnapshotSpaceAtCreate(t *testing.T) {
 	if err := os.Remove(filepath.Join(fixture.folder.Path, fixture.folder.MarkerName)); err != nil {
 		t.Fatal(err)
 	}
-	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil)
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestFolderOnboardingRollsBackControlStateAfterAPIFailure(t *testing.T) {
 	if err := os.Remove(filepath.Join(fixture.folder.Path, fixture.folder.MarkerName)); err != nil {
 		t.Fatal(err)
 	}
-	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil)
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestFolderOnboardingPlanExpiresAndDetectsCardSwap(t *testing.T) {
 	}
 	swapped := fixture.card
 	swapped.Identity.ID = "ffeeddccbbaa99887766554433221100"
-	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil)
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestStatesOnboardingRequiresItsSpecificWarning(t *testing.T) {
 	if !plan.StatesWarning {
 		t.Fatalf("states plan omitted warning: %+v", plan)
 	}
-	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil)
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

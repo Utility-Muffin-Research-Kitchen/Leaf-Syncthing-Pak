@@ -50,7 +50,7 @@ func TestManagedFolderMutationsArePausedBoundedAndVersioned(t *testing.T) {
 	process := &Process{client: &http.Client{Transport: transport}, apiKey: "secret"}
 	root := t.TempDir()
 	folder := ConfiguredFolder{
-		ID: "leaf-saves-0011223344556677", Label: "Leaf Saves", Kind: "saves",
+		ID: "retro-saves", Label: "Leaf Saves", Kind: "saves",
 		Path: filepath.Join(root, "Saves"), Type: "sendreceive", MarkerName: ".leaf-saves-001122334455",
 		VersioningType: "simple", VersioningFSPath: filepath.Join(root, ".userdata", "mlp1", "Syncthing", "versions", "saves"),
 		VersioningFSType: "basic", Devices: []string{managedSelf, managedPeer},
@@ -63,7 +63,7 @@ func TestManagedFolderMutationsArePausedBoundedAndVersioned(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || requests[0].method != http.MethodPost || requests[0].path != "/rest/config/folders" ||
-		requests[1].method != http.MethodPatch || requests[1].path != "/rest/config/folders/leaf-saves-0011223344556677" {
+		requests[1].method != http.MethodPatch || requests[1].path != "/rest/config/folders/retro-saves" {
 		t.Fatalf("requests = %+v", requests)
 	}
 	var create managedFolderRequest

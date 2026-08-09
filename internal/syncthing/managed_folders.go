@@ -115,7 +115,7 @@ func (process *Process) SetManagedFolderType(ctx context.Context, folder Configu
 }
 
 func managedFolderAPIRequest(folder ConfiguredFolder) (managedFolderRequest, error) {
-	if !managedFolderIDPattern.MatchString(folder.ID) || !filepath.IsAbs(folder.Path) ||
+	if !ValidFolderID(folder.ID) || !filepath.IsAbs(folder.Path) ||
 		folder.MarkerName == "" || folder.MarkerName == ".stfolder" || filepath.Base(folder.MarkerName) != folder.MarkerName ||
 		!validDisplayName(strings.TrimSpace(folder.Label), maxFolderName) ||
 		(folder.Type != "sendonly" && folder.Type != "sendreceive" && folder.Type != "receiveonly") {

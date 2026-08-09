@@ -11,29 +11,19 @@ import (
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
-func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inventory []cards.Card, controlState ...map[string]folderControlRecord) ([]uicontrol.FolderStatus, []uicontrol.Issue) {
-	bindings := make(map[string][]cards.Card)
+func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inventory []cards.Card, controlState map[string]folderControlRecord) ([]uicontrol.FolderStatus, []uicontrol.Issue) {
+	cardsByID := make(map[string][]cards.Card)
 	for _, card := range inventory {
 		if card.Identity.ID == "" {
 			continue
 		}
-		for _, kind := range []string{"saves", "states"} {
-			folderID, _, err := cards.BindingNames(card.Identity.ID, kind)
-			if err == nil {
-				bindings[folderID] = append(bindings[folderID], card)
-			}
-		}
+		cardsByID[card.Identity.ID] = append(cardsByID[card.Identity.ID], card)
 	}
 
 	rows := make([]uicontrol.FolderStatus, 0, len(configured))
 	issues := []uicontrol.Issue{}
 	for _, folder := range configured {
-		control := folderControlRecord{FirstSync: true}
-		if len(controlState) > 0 {
-			if stored, ok := controlState[0][folder.ID]; ok {
-				control = stored
-			}
-		}
+		control, registered := controlState[folder.ID]
 		reasons := []string{}
 		if control.Manual {
 			reasons = append(reasons, "manual")
@@ -53,7 +43,23 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		if row.Versioning == "" {
 			row.Versioning = "none"
 		}
-		candidates := bindings[folder.ID]
+		candidates := []cards.Card{}
+		expectedMarker := ""
+		if registered && completeFolderBinding(control) {
+			row.CardID = control.CardID
+			candidates = cardsByID[control.CardID]
+			expectedMarker = control.MarkerName
+			if folder.Kind != control.Kind {
+				addFolderIssue(&row, &issues, "unsafe-folder-kind", "The managed folder kind does not match its registered Leaf binding")
+			}
+		} else {
+			addFolderIssue(&row, &issues, "unregistered-folder", "The managed folder has no durable Leaf card binding")
+			row.PauseReasons = appendUnique(row.PauseReasons, "health")
+			row.Paused = true
+			row.State = "error"
+			rows = append(rows, row)
+			continue
+		}
 		if len(candidates) != 1 {
 			code := "unknown-card-binding"
 			message := "No enrolled physical card matches this managed folder"
@@ -72,10 +78,9 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		card := candidates[0]
 		row.CardID = card.Identity.ID
 		row.Label += " — " + sourceLabel(card.Source)
-		expectedID, expectedMarker, _ := cards.BindingNames(card.Identity.ID, folder.Kind)
 		expectedPath := managedContentPath(card.Source, folder.Kind)
 		storageReason := "storage:" + card.Identity.ID
-		if expectedID != folder.ID || expectedPath == "" || filepath.Clean(folder.Path) != filepath.Clean(expectedPath) {
+		if expectedPath == "" || filepath.Clean(folder.Path) != filepath.Clean(expectedPath) {
 			addFolderIssue(&row, &issues, "unsafe-folder-path", "The managed folder path does not match its physical card and PATH-2 content kind")
 		}
 		if card.State != cards.StateEnrolled || !card.Present || card.DuplicateID {

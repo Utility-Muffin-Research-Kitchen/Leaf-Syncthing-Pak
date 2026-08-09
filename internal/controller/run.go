@@ -294,7 +294,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			if inventoryErr != nil {
 				return uicontrol.Status{}, b3OperationError(inventoryErr)
 			}
-			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			card, cardOK := cardForConfiguredFolder(folder, inventory, folderControls.Snapshot())
 			if !cardOK || !usableEnrolledCard(card) {
 				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
 			}
@@ -323,7 +323,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			if inventoryErr != nil {
 				return uicontrol.Status{}, b3OperationError(inventoryErr)
 			}
-			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			card, cardOK := cardForConfiguredFolder(folder, inventory, folderControls.Snapshot())
 			if !cardOK || !usableEnrolledCard(card) {
 				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
 			}
@@ -372,7 +372,7 @@ func (runner Runner) Run(ctx context.Context) error {
 			if inventoryErr != nil {
 				return uicontrol.Status{}, b3OperationError(inventoryErr)
 			}
-			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			card, cardOK := cardForConfiguredFolder(folder, inventory, folderControls.Snapshot())
 			if !cardOK || !usableEnrolledCard(card) {
 				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
 			}
@@ -855,7 +855,7 @@ func findConfiguredFolder(folders []syncthingconfig.ConfiguredFolder, folderID s
 	return syncthingconfig.ConfiguredFolder{}, -1, false
 }
 
-func controlStatus(session *Session, game life1.GameState, inventory []cards.Card, folderState ...map[string]folderControlRecord) uicontrol.Status {
+func controlStatus(session *Session, game life1.GameState, inventory []cards.Card, folderState map[string]folderControlRecord) uicontrol.Status {
 	status := uicontrol.Status{
 		Controller: "running",
 		Upstream: uicontrol.UpstreamStatus{
@@ -865,7 +865,7 @@ func controlStatus(session *Session, game life1.GameState, inventory []cards.Car
 		Recovery:     uicontrol.RecoveryStatus{State: "ready", Changed: session.Recovery.Changed},
 		Capabilities: []string{uicontrol.OperationGet, uicontrol.OperationEnrollCard},
 	}
-	return applyInventory(status, inventory, session.Folders, folderState...)
+	return applyInventory(status, inventory, session.Folders, folderState)
 }
 
 func controlGatewayStatus(status gatewayserver.Status) uicontrol.GatewayStatus {
@@ -882,9 +882,9 @@ func controlGatewayStatus(status gatewayserver.Status) uicontrol.GatewayStatus {
 	return converted
 }
 
-func applyInventory(status uicontrol.Status, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder, folderState ...map[string]folderControlRecord) uicontrol.Status {
+func applyInventory(status uicontrol.Status, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder, folderState map[string]folderControlRecord) uicontrol.Status {
 	status = applyCardInventory(status, inventory)
-	rows, folderIssues := reconcileManagedFolders(folders, inventory, folderState...)
+	rows, folderIssues := reconcileManagedFolders(folders, inventory, folderState)
 	issues := make([]uicontrol.Issue, 0, len(status.Issues)+len(folderIssues))
 	for _, issue := range status.Issues {
 		if issue.Scope != "folder" {

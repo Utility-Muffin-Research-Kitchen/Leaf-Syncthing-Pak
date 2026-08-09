@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var managedFolderIDPattern = regexp.MustCompile(`^leaf-(saves|states)-[0-9a-f]{16}$`)
+var legacyManagedFolderIDPattern = regexp.MustCompile(`^leaf-(saves|states)-[0-9a-f]{16}$`)
 
 const maxManagedFolders = 16
 
@@ -27,10 +27,46 @@ type ConfiguredFolder struct {
 	Devices          []string
 }
 
-// ReadManagedFolders reads only Leaf-owned folder IDs. B1 never creates a
-// folder; it recognizes pre-existing bindings so they can be paused before
-// upstream starts and reported safely until B3 owns onboarding.
+// ValidFolderID bounds IDs that cross the controller and REST path boundary.
+func ValidFolderID(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '.' || character == '_' ||
+			character == ':' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// ReadManagedFolders preserves the strict B3 discovery rule used to migrate
+// pre-binding-registry configurations.
 func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
+	return readManagedFolders(configDir, nil)
+}
+
+// ReadManagedFoldersForBindings selects exactly the IDs registered by the
+// controller. Network folder IDs do not need a Leaf-specific prefix.
+func ReadManagedFoldersForBindings(configDir string, bindings map[string]string) ([]ConfiguredFolder, error) {
+	if bindings == nil {
+		bindings = map[string]string{}
+	}
+	if len(bindings) > maxManagedFolders {
+		return nil, errors.New("read managed folders: too many registered bindings")
+	}
+	for folderID, kind := range bindings {
+		if !ValidFolderID(folderID) || (kind != "saves" && kind != "states") {
+			return nil, errors.New("read managed folders: invalid registered binding")
+		}
+	}
+	return readManagedFolders(configDir, bindings)
+}
+
+func readManagedFolders(configDir string, bindings map[string]string) ([]ConfiguredFolder, error) {
 	contents, err := readSafeConfig(filepath.Join(configDir, "config.xml"))
 	if err != nil {
 		return nil, err
@@ -62,15 +98,33 @@ func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
 	}
 	folders := make([]ConfiguredFolder, 0, len(document.Folders))
 	seen := make(map[string]bool)
+	remaining := make(map[string]bool, len(bindings))
+	for folderID := range bindings {
+		remaining[folderID] = true
+	}
 	for _, folder := range document.Folders {
-		if !strings.HasPrefix(folder.ID, "leaf-saves-") && !strings.HasPrefix(folder.ID, "leaf-states-") {
-			continue
+		kind := ""
+		if bindings != nil {
+			var managed bool
+			kind, managed = bindings[folder.ID]
+			if !managed {
+				continue
+			}
+		} else {
+			if !strings.HasPrefix(folder.ID, "leaf-saves-") && !strings.HasPrefix(folder.ID, "leaf-states-") {
+				continue
+			}
+			match := legacyManagedFolderIDPattern.FindStringSubmatch(folder.ID)
+			if match == nil {
+				return nil, fmt.Errorf("read managed folders: invalid Leaf folder %q", folder.ID)
+			}
+			kind = match[1]
 		}
-		match := managedFolderIDPattern.FindStringSubmatch(folder.ID)
-		if match == nil || seen[folder.ID] || strings.TrimSpace(folder.Path) == "" {
+		if !ValidFolderID(folder.ID) || seen[folder.ID] || strings.TrimSpace(folder.Path) == "" {
 			return nil, fmt.Errorf("read managed folders: invalid or duplicate Leaf folder %q", folder.ID)
 		}
 		seen[folder.ID] = true
+		delete(remaining, folder.ID)
 		folderType := folder.Type
 		if folderType == "" {
 			folderType = "sendreceive"
@@ -80,7 +134,7 @@ func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
 			markerName = ".stfolder"
 		}
 		configured := ConfiguredFolder{
-			ID: folder.ID, Label: folder.Label, Kind: match[1], Path: folder.Path,
+			ID: folder.ID, Label: folder.Label, Kind: kind, Path: folder.Path,
 			Type: folderType, MarkerName: markerName,
 			VersioningType: folder.Versioning.Type, VersioningFSPath: folder.Versioning.FSPath,
 			VersioningFSType: folder.Versioning.FSType,
@@ -100,6 +154,9 @@ func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
 		if len(folders) > maxManagedFolders {
 			return nil, errors.New("read managed folders: too many Leaf folders")
 		}
+	}
+	if len(remaining) != 0 {
+		return nil, errors.New("read managed folders: registered folder is missing from upstream config")
 	}
 	return folders, nil
 }

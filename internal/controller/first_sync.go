@@ -140,7 +140,7 @@ func (manager *firstSyncManager) recover(folders []syncthing.ConfiguredFolder, i
 	}
 	for _, folder := range folders {
 		control := controlState[folder.ID]
-		card, ok := cardForConfiguredFolder(folder, inventory)
+		card, ok := cardForConfiguredFolder(folder, inventory, controlState)
 		if !ok || !usableEnrolledCard(card) {
 			// Card absence, read-only state, or duplicate identity is a transient
 			// storage pause. Never rewrite the durable first-sync decision from an
@@ -221,12 +221,12 @@ func (manager *firstSyncManager) Prepare(ctx context.Context, folder syncthing.C
 	if !usableEnrolledCard(card) {
 		return firstSyncProgress{}, errors.New("first sync requires the enrolled physical card to be present and writable")
 	}
-	if err := validateFirstSyncBinding(folder, card); err != nil {
-		return firstSyncProgress{}, err
-	}
 	control, ok := controls.Snapshot()[folder.ID]
 	if !ok || !control.FirstSync || control.FirstSyncEpoch == 0 {
 		return firstSyncProgress{}, errors.New("first-sync protection is not pending for this folder")
+	}
+	if err := validateFirstSyncBinding(folder, card, control); err != nil {
+		return firstSyncProgress{}, err
 	}
 	manager.progress[folder.ID] = firstSyncProgress{State: "preparing"}
 	progress, err := manager.prepareLocked(ctx, folder, card, control.FirstSyncEpoch)
@@ -379,12 +379,12 @@ func (manager *firstSyncManager) Complete(folder syncthing.ConfiguredFolder, car
 	if !usableEnrolledCard(card) {
 		return errors.New("first sync requires the enrolled physical card to be present and writable")
 	}
-	if err := validateFirstSyncBinding(folder, card); err != nil {
-		return err
-	}
 	control, ok := controls.Snapshot()[folder.ID]
 	if !ok || !control.FirstSync || control.FirstSyncEpoch == 0 {
 		return errors.New("first-sync protection is not pending for this folder")
+	}
+	if err := validateFirstSyncBinding(folder, card, control); err != nil {
+		return err
 	}
 	mode := "sendonly"
 	snapshotName := ""
@@ -729,9 +729,8 @@ func readFirstSyncMarker(card cards.Card, folder syncthing.ConfiguredFolder, epo
 	return marker, true, nil
 }
 
-func validateFirstSyncBinding(folder syncthing.ConfiguredFolder, card cards.Card) error {
-	expectedID, expectedMarker, err := cards.BindingNames(card.Identity.ID, folder.Kind)
-	if err != nil || expectedID != folder.ID || expectedMarker != folder.MarkerName ||
+func validateFirstSyncBinding(folder syncthing.ConfiguredFolder, card cards.Card, binding folderControlRecord) error {
+	if binding.CardID != card.Identity.ID || binding.Kind != folder.Kind || binding.MarkerName != folder.MarkerName ||
 		filepath.Clean(folder.Path) != filepath.Clean(managedContentPath(card.Source, folder.Kind)) {
 		return errors.New("first-sync folder binding does not match its physical card")
 	}
@@ -748,15 +747,15 @@ func validateFirstSyncBinding(folder syncthing.ConfiguredFolder, card cards.Card
 	return nil
 }
 
-func cardForConfiguredFolder(folder syncthing.ConfiguredFolder, inventory []cards.Card) (cards.Card, bool) {
+func cardForConfiguredFolder(folder syncthing.ConfiguredFolder, inventory []cards.Card, controlState map[string]folderControlRecord) (cards.Card, bool) {
+	binding, ok := controlState[folder.ID]
+	if !ok || !completeFolderBinding(binding) || binding.Kind != folder.Kind {
+		return cards.Card{}, false
+	}
 	var found cards.Card
 	count := 0
 	for _, card := range inventory {
-		if card.Identity.ID == "" {
-			continue
-		}
-		folderID, _, err := cards.BindingNames(card.Identity.ID, folder.Kind)
-		if err == nil && folderID == folder.ID {
+		if card.Identity.ID == binding.CardID {
 			found = card
 			count++
 		}
