@@ -55,7 +55,8 @@ int main(void) {
             "\"label\":\"Leaf Saves — Primary\",\"path\":\"/mnt/sdcard/Saves\","
             "\"file_count\":3,\"directory_count\":2,\"content_bytes\":4096,"
             "\"available_bytes\":8192,\"snapshot_possible\":true,\"peer_count\":1,"
-            "\"states_warning\":false,\"expires_at\":\"2026-08-08T12:05:00Z\"},"
+            "\"states_warning\":false,\"join_existing\":true,\"offer_device_id\":\"PEER\","
+            "\"expires_at\":\"2026-08-08T12:05:00Z\"},"
         "\"cards\":[{\"id\":\"00112233445566778899aabbccddeeff\",\"source_id\":\"primary\","
             "\"id_suffix\":\"ccddeeff\",\"slot\":\"Primary\",\"root\":\"/mnt/sdcard\","
             "\"state\":\"enrolled\",\"enrolled\":true,\"present\":true,\"writable\":true,"
@@ -129,6 +130,7 @@ int main(void) {
     assert(status.folder_offer_count == 1 &&
            strcmp(status.folder_offers[0].device_name, "Laptop") == 0);
     assert(status.onboarding_present && status.onboarding.snapshot_possible);
+    assert(status.onboarding.join_existing && strcmp(status.onboarding.offer_device_id, "PEER") == 0);
     assert(status.card_count == 1 && strcmp(status.cards[0].source_id, "primary") == 0);
     assert(status.onboarding.file_count == 3 && status.onboarding.available_bytes == 8192);
     assert(status.folder_count == 1 && status.folders[0].local_items == 3 &&

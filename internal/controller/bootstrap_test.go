@@ -253,7 +253,7 @@ func TestBootstrapLoadsExternalFolderIDFromDurableBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controls.Add(folder, card); err != nil {
+	if err := controls.BeginAdd(folder, card); err != nil {
 		t.Fatal(err)
 	}
 	runner := Runner{
@@ -293,6 +293,46 @@ func TestBootstrapLoadsExternalFolderIDFromDurableBinding(t *testing.T) {
 	defer session.Close()
 	if len(session.Folders) != 1 || session.Folders[0].ID != folder.ID || session.Folders[0].Kind != "saves" || !session.Folders[0].Paused {
 		t.Fatalf("external managed folder session = %+v", session.Folders)
+	}
+	if session.FolderControls.Snapshot()[folder.ID].PendingAdd {
+		t.Fatalf("present pending add was not activated: %+v", session.FolderControls.Snapshot())
+	}
+}
+
+func TestBootstrapRollsBackPendingAddMissingFromUpstream(t *testing.T) {
+	config := testConfig(t)
+	card := cards.Card{Identity: cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"}}
+	_, markerName, err := cards.BindingNames(card.Identity.ID, "saves")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder := syncthingconfig.ConfiguredFolder{ID: "retro-saves", Kind: "saves", MarkerName: markerName}
+	controlPath := filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
+	controls, err := newFolderControlStore(controlPath, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controls.BeginAdd(folder, card); err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{
+		Config: config,
+		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		EnsureIdentity: successfulIdentity,
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) {
+			return []cards.Card{card}, nil
+		},
+		ApplyPause: successfulPause,
+	}
+	session, err := runner.Bootstrap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if len(session.Folders) != 0 || len(session.FolderControls.Snapshot()) != 0 {
+		t.Fatalf("missing pending add survived recovery: folders=%+v controls=%+v", session.Folders, session.FolderControls.Snapshot())
 	}
 }
 

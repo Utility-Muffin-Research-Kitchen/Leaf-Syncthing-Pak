@@ -46,12 +46,23 @@ func ValidFolderID(value string) bool {
 // ReadManagedFolders preserves the strict B3 discovery rule used to migrate
 // pre-binding-registry configurations.
 func ReadManagedFolders(configDir string) ([]ConfiguredFolder, error) {
-	return readManagedFolders(configDir, nil)
+	return readManagedFolders(configDir, nil, false)
 }
 
 // ReadManagedFoldersForBindings selects exactly the IDs registered by the
 // controller. Network folder IDs do not need a Leaf-specific prefix.
 func ReadManagedFoldersForBindings(configDir string, bindings map[string]string) ([]ConfiguredFolder, error) {
+	return readManagedFoldersForBindings(configDir, bindings, true)
+}
+
+// ReadAvailableManagedFoldersForBindings is the crash-recovery variant. It
+// returns registered folders that exist and lets the controller resolve any
+// missing pending transaction without weakening active-binding checks.
+func ReadAvailableManagedFoldersForBindings(configDir string, bindings map[string]string) ([]ConfiguredFolder, error) {
+	return readManagedFoldersForBindings(configDir, bindings, false)
+}
+
+func readManagedFoldersForBindings(configDir string, bindings map[string]string, requireAll bool) ([]ConfiguredFolder, error) {
 	if bindings == nil {
 		bindings = map[string]string{}
 	}
@@ -63,10 +74,10 @@ func ReadManagedFoldersForBindings(configDir string, bindings map[string]string)
 			return nil, errors.New("read managed folders: invalid registered binding")
 		}
 	}
-	return readManagedFolders(configDir, bindings)
+	return readManagedFolders(configDir, bindings, requireAll)
 }
 
-func readManagedFolders(configDir string, bindings map[string]string) ([]ConfiguredFolder, error) {
+func readManagedFolders(configDir string, bindings map[string]string, requireAll bool) ([]ConfiguredFolder, error) {
 	contents, err := readSafeConfig(filepath.Join(configDir, "config.xml"))
 	if err != nil {
 		return nil, err
@@ -155,7 +166,7 @@ func readManagedFolders(configDir string, bindings map[string]string) ([]Configu
 			return nil, errors.New("read managed folders: too many Leaf folders")
 		}
 	}
-	if len(remaining) != 0 {
+	if requireAll && len(remaining) != 0 {
 		return nil, errors.New("read managed folders: registered folder is missing from upstream config")
 	}
 	return folders, nil

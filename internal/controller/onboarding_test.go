@@ -74,7 +74,7 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 		folder.VersioningType != "simple" || folder.VersioningFSType != "basic" || len(folder.Devices) != 2 {
 		t.Fatalf("created folder = %+v, API=%+v", folder, upstream.added)
 	}
-	if !controls.Snapshot()[folder.ID].FirstSync {
+	if !controls.Snapshot()[folder.ID].FirstSync || controls.Snapshot()[folder.ID].PendingAdd {
 		t.Fatalf("created folder control = %+v", controls.Snapshot())
 	}
 	if err := cards.ValidateManagedMarker(folder.Path, folder.MarkerName); err != nil {
@@ -88,6 +88,44 @@ func TestFolderOnboardingPlanAndCreateConfinedPausedFolder(t *testing.T) {
 	}
 	if _, err := manager.Create(context.Background(), plan.ID, onboardingSelf, false, true, []cards.Card{fixture.card}, nil, controls, upstream); err == nil {
 		t.Fatal("consumed onboarding plan was reused")
+	}
+}
+
+func TestFolderOfferPlanKeepsNetworkIDAndOnlyOfferingPeer(t *testing.T) {
+	fixture := newFirstSyncFixture(t, "sendreceive")
+	if err := os.Remove(filepath.Join(fixture.folder.Path, fixture.folder.MarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPeer := "CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ"
+	upstream := &fakeManagedFolderUpstream{devices: []string{onboardingSelf, onboardingPeer, otherPeer}}
+	manager := newOnboardingManager(onboardingOptions{
+		Random:         strings.NewReader(strings.Repeat("h", 16)),
+		AvailableBytes: func(string) (uint64, error) { return 64 * 1024 * 1024, nil },
+		SyncFilesystem: func(string) error { return nil },
+	})
+	plan, err := manager.PlanOffer(
+		context.Background(), "primary", "saves", "sendreceive", "retro-saves", "Retro Saves",
+		onboardingPeer, onboardingSelf, []cards.Card{fixture.card}, nil, upstream,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FolderID != "retro-saves" || plan.Label != "Retro Saves" || plan.OfferDeviceID != onboardingPeer || plan.PeerCount != 1 {
+		t.Fatalf("offer plan = %+v", plan)
+	}
+	folder, err := manager.Create(context.Background(), plan.ID, onboardingSelf, false, true, []cards.Card{fixture.card}, nil, controls, upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folder.ID != "retro-saves" || len(folder.Devices) != 2 || folder.Devices[0] != onboardingSelf || folder.Devices[1] != onboardingPeer {
+		t.Fatalf("accepted offer folder = %+v", folder)
+	}
+	if record := controls.Snapshot()[folder.ID]; record.CardID != fixture.card.Identity.ID || record.Kind != "saves" || record.PendingAdd {
+		t.Fatalf("accepted offer binding = %+v", record)
 	}
 }
 

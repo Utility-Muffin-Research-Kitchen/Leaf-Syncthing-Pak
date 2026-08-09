@@ -277,6 +277,14 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(onboarding, "states_warning");
         if (!cJSON_IsBool(value)) return -1;
         plan->states_warning = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(onboarding, "join_existing");
+        if (value) {
+            if (!cJSON_IsBool(value)) return -1;
+            plan->join_existing = cJSON_IsTrue(value);
+        }
+        if (ls_copy_optional_json(plan->offer_device_id, sizeof(plan->offer_device_id),
+                                  cJSON_GetObjectItemCaseSensitive(onboarding, "offer_device_id")) != 0 ||
+            (plan->join_existing != (plan->offer_device_id[0] != '\0'))) return -1;
         status->onboarding_present = true;
     }
 
@@ -619,6 +627,26 @@ int ls_ui_folder_onboard_plan(const char *socket_path, const char *source_id,
 invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create folder review request");
+    return -1;
+}
+
+int ls_ui_folder_offer_plan(const char *socket_path, const char *folder_id,
+                            const char *device_id, const char *source_id,
+                            const char *kind, const char *folder_type,
+                            ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id || !device_id || !source_id || !kind ||
+        (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0) ||
+        !ls_ui_valid_folder_type(folder_type) ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddStringToObject(arguments, "source_id", source_id) ||
+        !cJSON_AddStringToObject(arguments, "kind", kind) ||
+        !cJSON_AddStringToObject(arguments, "folder_type", folder_type)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.offer.plan", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder offer review request");
     return -1;
 }
 

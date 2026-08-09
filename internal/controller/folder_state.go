@@ -25,6 +25,7 @@ type folderControlRecord struct {
 	FirstSync      bool   `json:"first_sync"`
 	FirstSyncEpoch uint64 `json:"first_sync_epoch"`
 	PendingRescan  bool   `json:"pending_rescan"`
+	PendingAdd     bool   `json:"pending_add,omitempty"`
 }
 
 type folderControlDocument struct {
@@ -167,10 +168,19 @@ func (store *folderControlStore) RequireFirstSync(folderID string) error {
 }
 
 func (store *folderControlStore) Add(folder syncthing.ConfiguredFolder, card cards.Card) error {
+	return store.add(folder, card, false)
+}
+
+func (store *folderControlStore) BeginAdd(folder syncthing.ConfiguredFolder, card cards.Card) error {
+	return store.add(folder, card, true)
+}
+
+func (store *folderControlStore) add(folder syncthing.ConfiguredFolder, card cards.Card, pending bool) error {
 	record, err := newFolderControlRecord(folder, card)
 	if err != nil {
 		return err
 	}
+	record.PendingAdd = pending
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, ok := store.records[folder.ID]; ok {
@@ -187,6 +197,26 @@ func (store *folderControlStore) Add(folder syncthing.ConfiguredFolder, card car
 	store.records[folder.ID] = record
 	if err := store.persistLocked(); err != nil {
 		delete(store.records, folder.ID)
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) Activate(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok {
+		return errors.New("folder control state does not contain this folder")
+	}
+	if !record.PendingAdd {
+		return nil
+	}
+	record.PendingAdd = false
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingAdd = true
+		store.records[folderID] = record
 		return err
 	}
 	return nil

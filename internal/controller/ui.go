@@ -88,6 +88,15 @@ func findFolder(status uicontrol.Status, folderID string) (*uicontrol.FolderStat
 	return nil, false
 }
 
+func findFolderOffer(status uicontrol.Status, folderID, deviceID string) (uicontrol.FolderOfferStatus, bool) {
+	for _, offer := range status.FolderOffers {
+		if offer.FolderID == folderID && offer.DeviceID == deviceID {
+			return offer, true
+		}
+	}
+	return uicontrol.FolderOfferStatus{}, false
+}
+
 func folderSafeForAction(folder *uicontrol.FolderStatus) bool {
 	if folder == nil || folder.CardID == "" {
 		return false

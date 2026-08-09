@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 14 {
-		t.Fatalf("checked %d fixtures, want 14", checked)
+	if checked != 15 {
+		t.Fatalf("checked %d fixtures, want 15", checked)
 	}
 }
 
@@ -287,6 +287,19 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 			}
 			return status, nil
 		},
+		PlanFolderOffer: func(folderID, deviceID, sourceID, kind, folderType string) (Status, *ProtocolError) {
+			called = folderID + ":" + sourceID + ":" + kind + ":" + folderType
+			status := fixtureStatus()
+			status.Onboarding = &OnboardingStatus{
+				PlanID: "00112233445566778899aabbccddeeff", SourceID: sourceID,
+				CardID: "ffeeddccbbaa99887766554433221100", Kind: kind, FolderType: folderType,
+				FolderID: folderID, Label: "Retro Saves", Path: "/card/Saves",
+				FileCount: 2, DirectoryCount: 1, ContentBytes: 10, AvailableBytes: 100,
+				SnapshotPossible: true, PeerCount: 1, JoinExisting: true, OfferDeviceID: deviceID,
+				ExpiresAt: "2026-08-09T12:05:00Z",
+			}
+			return status, nil
+		},
 		CreateFolder: func(planID string, statesAcknowledged, manualAcknowledged bool) (Status, *ProtocolError) {
 			called = planID
 			if statesAcknowledged || !manualAcknowledged {
@@ -314,6 +327,12 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 	if !response.OK || called != "primary:saves:sendreceive" || response.Result == nil || response.Result.Onboarding == nil {
 		t.Fatalf("onboarding plan = %+v, called=%q", response, called)
 	}
+	offerDeviceID := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	response = operations.Handle([]byte(`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"` + offerDeviceID + `","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
+	if !response.OK || called != "retro-saves:primary:saves:sendreceive" || response.Result == nil ||
+		response.Result.Onboarding == nil || !response.Result.Onboarding.JoinExisting || response.Result.Onboarding.OfferDeviceID != offerDeviceID {
+		t.Fatalf("folder offer plan = %+v, called=%q", response, called)
+	}
 	response = operations.Handle([]byte(`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":true}}`))
 	if !response.OK || called != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("onboarding create = %+v, called=%q", response, called)
@@ -333,6 +352,7 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 
 	for _, request := range []string{
 		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"roms","folder_type":"sendreceive"}}`,
+		`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"../bad","device_id":"peer","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":false}}`,
 		`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"snapshot_limit_acknowledged":false}}`,
 		`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"hub_versioning_acknowledged":false}}`,

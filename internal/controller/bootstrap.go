@@ -226,10 +226,28 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 	}
 	folders := legacyFolders
 	if runner.LoadFolders == nil {
-		folders, err = syncthingconfig.ReadManagedFoldersForBindings(runner.Config.ConfigDir, folderControls.BindingKinds())
+		folders, err = syncthingconfig.ReadAvailableManagedFoldersForBindings(runner.Config.ConfigDir, folderControls.BindingKinds())
 		if err != nil {
 			_ = lifecycle.Close()
 			return nil, fmt.Errorf("read bound managed folders: %w", err)
+		}
+		configured := make(map[string]bool, len(folders))
+		for _, folder := range folders {
+			configured[folder.ID] = true
+		}
+		for folderID, record := range folderControls.Snapshot() {
+			switch {
+			case configured[folderID] && record.PendingAdd:
+				err = folderControls.Activate(folderID)
+			case !configured[folderID] && record.PendingAdd:
+				err = folderControls.Remove(folderID)
+			case !configured[folderID]:
+				err = errors.New("active registered folder is missing from upstream config")
+			}
+			if err != nil {
+				_ = lifecycle.Close()
+				return nil, fmt.Errorf("reconcile folder add transaction: %w", err)
+			}
 		}
 	}
 	firstSync, err := newFirstSyncManager(folders, inventory, folderControls, runner.FirstSyncOptions)

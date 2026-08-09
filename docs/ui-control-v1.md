@@ -190,6 +190,25 @@ snapshot/version inventory. Pause state is durable before the upstream pause
 request. A rescan requested while paused is durable and queued. Resume refuses
 while any non-manual reason remains, including B3's `first-sync` reason.
 
+## Folder-offer planning
+
+`status.get` exposes pending offers without accepting them. To review one
+against a selected enrolled card and local direction, the UI sends:
+
+```json
+{"v":1,"id":"offer-plan","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}
+```
+
+The controller re-reads live offers, rejects encrypted or vanished offers, and
+returns the normal bounded onboarding review with `join_existing:true` and the
+offering device ID. The existing confirmed `folder.onboard.create` operation
+consumes that plan. Leaf retains the offered network folder ID but supplies its
+own card path, type, custom marker, paused first-sync state, and same-card
+versioning. Only the offering device is included; unrelated configured peers
+are never silently added. A pending binding is flushed before the upstream add;
+startup activates it if the paused upstream folder exists or rolls it back if
+the add never happened, without deleting the live Saves/States tree.
+
 ## Device operations
 
 ```json

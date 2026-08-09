@@ -51,6 +51,10 @@ func TestReadManagedFoldersForBindingsAcceptsStandardFolderID(t *testing.T) {
 	if _, err := ReadManagedFoldersForBindings(directory, map[string]string{"missing": "saves"}); err == nil {
 		t.Fatal("missing registered folder was accepted")
 	}
+	available, err := ReadAvailableManagedFoldersForBindings(directory, map[string]string{"retro-saves": "saves", "missing": "states"})
+	if err != nil || len(available) != 1 || available[0].ID != "retro-saves" {
+		t.Fatalf("available bindings = %+v, %v", available, err)
+	}
 	folders, err = ReadManagedFoldersForBindings(directory, nil)
 	if err != nil || len(folders) != 0 {
 		t.Fatalf("nil binding registry selected folders: %+v, %v", folders, err)

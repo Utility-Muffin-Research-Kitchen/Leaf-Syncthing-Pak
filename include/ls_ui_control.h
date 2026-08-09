@@ -111,6 +111,8 @@ typedef struct {
     bool snapshot_possible;
     int peer_count;
     bool states_warning;
+    bool join_existing;
+    char offer_device_id[128];
     char expires_at[65];
 } ls_ui_onboarding;
 
@@ -214,6 +216,15 @@ int ls_ui_folder_onboard_plan(const char *socket_path,
                               ls_ui_status *status,
                               char *error,
                               size_t error_size);
+int ls_ui_folder_offer_plan(const char *socket_path,
+                            const char *folder_id,
+                            const char *device_id,
+                            const char *source_id,
+                            const char *kind,
+                            const char *folder_type,
+                            ls_ui_status *status,
+                            char *error,
+                            size_t error_size);
 int ls_ui_folder_onboard_create(const char *socket_path,
                                 const char *plan_id,
                                 bool states_warning_acknowledged,

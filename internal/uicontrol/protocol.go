@@ -25,6 +25,7 @@ const (
 	OperationFolderRename           = "folder.rename"
 	OperationFolderInspect          = "folder.inspect"
 	OperationFolderOnboardPlan      = "folder.onboard.plan"
+	OperationFolderOfferPlan        = "folder.offer.plan"
 	OperationFolderOnboardCreate    = "folder.onboard.create"
 	OperationFolderFirstSyncPrepare = "folder.first-sync.prepare"
 	OperationFolderFirstSyncStart   = "folder.first-sync.start"
@@ -146,6 +147,8 @@ type OnboardingStatus struct {
 	SnapshotPossible bool   `json:"snapshot_possible"`
 	PeerCount        int    `json:"peer_count"`
 	StatesWarning    bool   `json:"states_warning"`
+	JoinExisting     bool   `json:"join_existing,omitempty"`
+	OfferDeviceID    string `json:"offer_device_id,omitempty"`
 	ExpiresAt        string `json:"expires_at"`
 }
 
@@ -253,6 +256,7 @@ type Operations struct {
 	FolderAction      func(string, string, string) (Status, *ProtocolError)
 	FolderInspect     func(string) (Status, *ProtocolError)
 	PlanFolder        func(string, string, string) (Status, *ProtocolError)
+	PlanFolderOffer   func(string, string, string, string, string) (Status, *ProtocolError)
 	CreateFolder      func(string, bool, bool) (Status, *ProtocolError)
 	PrepareFirstSync  func(string) (Status, *ProtocolError)
 	StartFirstSync    func(string, bool) (Status, *ProtocolError)
@@ -394,6 +398,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		}
 		var operationError *ProtocolError
 		status, operationError = operations.PlanFolder(sourceID, kind, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderOfferPlan:
+		if operations.PlanFolderOffer == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, sourceID, kind, folderType, err := decodeFolderOfferPlanArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.offer.plan requires a valid offer, source, kind, and folder type")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.PlanFolderOffer(folderID, deviceID, sourceID, kind, folderType)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
@@ -574,6 +591,28 @@ func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string,
 		return "", "", "", errors.New("invalid onboarding plan arguments")
 	}
 	return arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+}
+
+func decodeFolderOfferPlanArguments(raw json.RawMessage) (string, string, string, string, string, error) {
+	var arguments struct {
+		FolderID   string `json:"folder_id"`
+		DeviceID   string `json:"device_id"`
+		SourceID   string `json:"source_id"`
+		Kind       string `json:"kind"`
+		FolderType string `json:"folder_type"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", "", "", "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.FolderID) ||
+		!validIdentifier(arguments.DeviceID) || !validIdentifier(arguments.SourceID) ||
+		(arguments.Kind != "saves" && arguments.Kind != "states") ||
+		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") {
+		return "", "", "", "", "", errors.New("invalid folder offer plan arguments")
+	}
+	return arguments.FolderID, arguments.DeviceID, arguments.SourceID, arguments.Kind, arguments.FolderType, nil
 }
 
 func decodeOnboardingCreateArguments(raw json.RawMessage) (string, bool, bool, error) {
@@ -873,7 +912,8 @@ func (status Status) validate() error {
 			len(plan.Path) == 0 || len(plan.Path) > 1024 ||
 			!oneOf(plan.Kind, "saves", "states") || !oneOf(plan.FolderType, "sendonly", "sendreceive", "receiveonly") ||
 			plan.FileCount < 0 || plan.DirectoryCount < 0 || plan.ContentBytes < 0 || plan.AvailableBytes < 0 ||
-			plan.PeerCount < 1 || plan.ExpiresAt == "" || len(plan.ExpiresAt) > 64 {
+			plan.PeerCount < 1 || plan.ExpiresAt == "" || len(plan.ExpiresAt) > 64 ||
+			plan.JoinExisting != (plan.OfferDeviceID != "") || (plan.JoinExisting && !validIdentifier(plan.OfferDeviceID)) {
 			return errors.New("invalid folder onboarding status")
 		}
 	}

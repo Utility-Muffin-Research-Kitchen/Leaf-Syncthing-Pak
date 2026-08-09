@@ -176,7 +176,7 @@ func (runner Runner) Run(ctx context.Context) error {
 	}
 	if b3Folders != nil {
 		initialStatus.Capabilities = append(initialStatus.Capabilities,
-			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOnboardCreate,
+			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOfferPlan, uicontrol.OperationFolderOnboardCreate,
 			uicontrol.OperationFolderFirstSyncPrepare, uicontrol.OperationFolderFirstSyncStart,
 			uicontrol.OperationFolderTypeSet)
 	}
@@ -253,6 +253,37 @@ func (runner Runner) Run(ctx context.Context) error {
 			status.Store(updated)
 			return updated, nil
 		},
+		PlanFolderOffer: func(folderID, deviceID, sourceID, kind, folderType string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("folder setup is unavailable"))
+			}
+			current := refreshUIStatus()
+			offer, found := findFolderOffer(current, folderID, deviceID)
+			if !found {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The folder offer is no longer available"}
+			}
+			if offer.ReceiveEncrypted || offer.RemoteEncrypted {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Encrypted folder offers are not supported by Leaf"}
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			planContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			plan, planErr := onboarding.PlanOffer(
+				planContext, sourceID, kind, folderType, offer.FolderID, offer.Label, offer.DeviceID,
+				session.Identity.DeviceID, inventory, session.Folders, b3Folders,
+			)
+			if planErr != nil {
+				return uicontrol.Status{}, b3OperationError(planErr)
+			}
+			updated := applyInventory(current, inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			updated.Onboarding = controlOnboardingStatus(plan)
+			status.Store(updated)
+			return updated, nil
+		},
 		CreateFolder: func(planID string, statesAcknowledged, manualAcknowledged bool) (uicontrol.Status, *uicontrol.ProtocolError) {
 			if b3Folders == nil {
 				return uicontrol.Status{}, b3OperationError(errors.New("folder setup is unavailable"))
@@ -277,7 +308,7 @@ func (runner Runner) Run(ctx context.Context) error {
 				updated.Storage = &storage
 			}
 			status.Store(updated)
-			return updated, nil
+			return refreshUIStatus(), nil
 		},
 		PrepareFirstSync: func(folderID string) (uicontrol.Status, *uicontrol.ProtocolError) {
 			if b3Folders == nil {
@@ -842,7 +873,8 @@ func controlOnboardingStatus(plan onboardingPlan) *uicontrol.OnboardingStatus {
 		FolderType: plan.FolderType, FolderID: plan.FolderID, Label: plan.Label, Path: plan.Path,
 		FileCount: plan.FileCount, DirectoryCount: plan.DirectoryCount, ContentBytes: plan.ContentBytes,
 		AvailableBytes: available, SnapshotPossible: plan.SnapshotPossible, PeerCount: plan.PeerCount,
-		StatesWarning: plan.StatesWarning, ExpiresAt: plan.ExpiresAt.UTC().Format(time.RFC3339),
+		StatesWarning: plan.StatesWarning, JoinExisting: plan.OfferDeviceID != "", OfferDeviceID: plan.OfferDeviceID,
+		ExpiresAt: plan.ExpiresAt.UTC().Format(time.RFC3339),
 	}
 }
 

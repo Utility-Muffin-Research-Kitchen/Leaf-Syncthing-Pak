@@ -30,6 +30,7 @@ type fakeB3Upstream struct {
 	paused      map[string]bool
 	pauseCalls  []bool
 	rescanCalls int
+	offers      []syncthingconfig.UIFolderOffer
 }
 
 func newFakeB3Upstream() *fakeB3Upstream {
@@ -44,7 +45,10 @@ func newFakeB3Upstream() *fakeB3Upstream {
 }
 
 func (upstream *fakeB3Upstream) ReadUIStatus(_ context.Context, folders []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.UIStatus, error) {
-	status := syncthingconfig.UIStatus{Folders: make(map[string]syncthingconfig.UIFolderStatus)}
+	status := syncthingconfig.UIStatus{
+		Folders:      make(map[string]syncthingconfig.UIFolderStatus),
+		FolderOffers: append([]syncthingconfig.UIFolderOffer(nil), upstream.offers...),
+	}
 	for _, folder := range folders {
 		state := "idle"
 		if upstream.paused[folder.ID] {
@@ -88,6 +92,13 @@ func (upstream *fakeB3Upstream) ConfiguredFolderDevices(context.Context, string)
 func (upstream *fakeB3Upstream) AddManagedFolder(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
 	upstream.folders[folder.ID] = folder
 	upstream.paused[folder.ID] = true
+	remaining := upstream.offers[:0]
+	for _, offer := range upstream.offers {
+		if offer.FolderID != folder.ID {
+			remaining = append(remaining, offer)
+		}
+	}
+	upstream.offers = remaining
 	return nil
 }
 
@@ -403,6 +414,75 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	}
 	if len(upstream.pauseCalls) < 5 || upstream.pauseCalls[len(upstream.pauseCalls)-1] {
 		t.Fatalf("upstream pause transitions = %v", upstream.pauseCalls)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunPlansAndAcceptsStandardFolderOffer(t *testing.T) {
+	config := testConfig(t)
+	saves := filepath.Join(config.Sources[0].Root, "Saves")
+	if err := os.MkdirAll(saves, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources[0].SavesPath = saves
+	config.Sources[0].StatesPath = filepath.Join(config.Sources[0].Root, "States")
+	card := cards.Card{
+		Source: config.Sources[0], Identity: cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"},
+		State: cards.StateEnrolled, Present: true, Writable: true,
+	}
+	upstream := newFakeB3Upstream()
+	upstream.devices = append(upstream.devices, "CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ")
+	upstream.offers = []syncthingconfig.UIFolderOffer{{
+		FolderID: "retro-saves", Label: "Retro Saves", DeviceID: onboardingPeer, DeviceName: "Laptop",
+		OfferedAt: "2026-08-09T12:34:56Z",
+	}}
+	runner := Runner{
+		Config: config,
+		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
+			return &fakeLifecycle{}, life1.GameState{}, nil
+		},
+		Recover: func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
+			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
+		},
+		EnsureIdentity: func(ctx context.Context, options syncthingconfig.IdentityOptions, recovery syncthingconfig.RecoveryResult) (syncthingconfig.Identity, error) {
+			identity, err := successfulIdentity(ctx, options, recovery)
+			identity.DeviceID = onboardingSelf
+			return identity, err
+		},
+		ApplyPause: successfulPause,
+		StartProcess: func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
+			return upstream, nil
+		},
+		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) {
+			return []cards.Card{card}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	waitForControlSocket(t, config.ControlSocket)
+
+	plan := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"offer-plan","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"`+onboardingPeer+`","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`)
+	if !plan.OK || plan.Result == nil || plan.Result.Onboarding == nil || !plan.Result.Onboarding.JoinExisting ||
+		plan.Result.Onboarding.FolderID != "retro-saves" || plan.Result.Onboarding.OfferDeviceID != onboardingPeer {
+		t.Fatalf("offer plan = %+v", plan)
+	}
+	create := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"offer-create","op":"folder.onboard.create","args":{"plan_id":"%s","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":true}}`,
+		plan.Result.Onboarding.PlanID))
+	if !create.OK || create.Result == nil || len(create.Result.Folders) != 1 || create.Result.Folders[0].ID != "retro-saves" ||
+		create.Result.Folders[0].FirstSyncState != "required" || len(create.Result.FolderOffers) != 0 {
+		t.Fatalf("accepted offer = %+v", create)
+	}
+	created := upstream.folders["retro-saves"]
+	if len(created.Devices) != 2 || created.Devices[0] != onboardingSelf || created.Devices[1] != onboardingPeer {
+		t.Fatalf("accepted offer devices = %+v", created.Devices)
 	}
 
 	cancel()
