@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/cards"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/leaf"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/life1"
 	syncthingconfig "github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
@@ -61,26 +62,31 @@ type ApplyPauseFunc func(string, map[string]bool, syncthingconfig.SyncFilesystem
 type LoadManagedFoldersFunc func(string) ([]syncthingconfig.ConfiguredFolder, error)
 
 type Runner struct {
-	Config         Config
-	Connect        ConnectFunc
-	Recover        RecoverConfigFunc
-	EnsureIdentity EnsureIdentityFunc
-	ApplyPause     ApplyPauseFunc
-	LoadFolders    LoadManagedFoldersFunc
-	StartProcess   StartProcessFunc
-	LoadCards      LoadCardsFunc
-	EnrollCard     EnrollCardFunc
-	Logf           func(string, ...any)
+	Config            Config
+	Connect           ConnectFunc
+	Recover           RecoverConfigFunc
+	EnsureIdentity    EnsureIdentityFunc
+	ApplyPause        ApplyPauseFunc
+	LoadFolders       LoadManagedFoldersFunc
+	StartProcess      StartProcessFunc
+	LoadCards         LoadCardsFunc
+	EnrollCard        EnrollCardFunc
+	FirstSyncOptions  firstSyncOptions
+	OnboardingOptions onboardingOptions
+	Logf              func(string, ...any)
 }
 
 type Session struct {
-	State     life1.GameState
-	Recovery  syncthingconfig.RecoveryResult
-	Identity  syncthingconfig.Identity
-	PauseEdit syncthingconfig.PauseEditResult
-	Folders   []syncthingconfig.ConfiguredFolder
-	Lifecycle Lifecycle
-	lock      *os.File
+	State          life1.GameState
+	Recovery       syncthingconfig.RecoveryResult
+	Identity       syncthingconfig.Identity
+	PauseEdit      syncthingconfig.PauseEditResult
+	Folders        []syncthingconfig.ConfiguredFolder
+	Inventory      []cards.Card
+	FolderControls *folderControlStore
+	FirstSync      *firstSyncManager
+	Lifecycle      Lifecycle
+	lock           *os.File
 }
 
 func LoadConfig() (Config, error) {
@@ -185,10 +191,37 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("read managed folders: %w", err)
 	}
-	pauseSet := make(map[string]bool, len(folders))
-	for _, folder := range folders {
-		pauseSet[folder.ID] = true
+	controlPath := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
+	folderControls, err := newFolderControlStore(controlPath, folders)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("load folder control state: %w", err)
 	}
+	inventory := []cards.Card{}
+	if len(folders) > 0 {
+		loadCards := runner.LoadCards
+		if loadCards == nil {
+			loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
+				live, err := cards.InspectSources(sources, cards.Options{})
+				if err != nil {
+					return nil, err
+				}
+				return cards.ReconcileRegistry(registryDirectory, sources, live, nil)
+			}
+		}
+		registryDirectory := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf")
+		inventory, err = loadCards(runner.Config.Sources, registryDirectory)
+		if err != nil {
+			_ = lifecycle.Close()
+			return nil, fmt.Errorf("verify cards before offline pause: %w", err)
+		}
+	}
+	firstSync, err := newFirstSyncManager(folders, inventory, folderControls, runner.FirstSyncOptions)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("recover first-sync state: %w", err)
+	}
+	pauseSet := requiredOfflinePauseSet(folders, inventory, folderControls.Snapshot())
 	applyPause := runner.ApplyPause
 	if applyPause == nil {
 		applyPause = syncthingconfig.ApplyOfflinePauseSet
@@ -199,12 +232,13 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		return nil, fmt.Errorf("apply offline pause set: %w", err)
 	}
 	for index := range folders {
-		folders[index].Paused = true
+		folders[index].Paused = pauseSet[folders[index].ID]
 	}
 
 	closeLock = false
 	return &Session{
 		State: state, Recovery: recovery, Identity: identity, PauseEdit: pauseEdit, Folders: folders,
+		Inventory: inventory, FolderControls: folderControls, FirstSync: firstSync,
 		Lifecycle: lifecycle, lock: lock,
 	}, nil
 }

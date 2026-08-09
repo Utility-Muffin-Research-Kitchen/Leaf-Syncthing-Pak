@@ -29,6 +29,8 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 		}
 		status.Folders[index].LocalBytes = upstream.LocalBytes
 		status.Folders[index].GlobalBytes = upstream.GlobalBytes
+		status.Folders[index].LocalItems = upstream.LocalItems
+		status.Folders[index].GlobalItems = upstream.GlobalItems
 		status.Folders[index].LastSync = upstream.LastActivity
 		if len(status.Folders[index].Issues) == 0 {
 			if status.Folders[index].Paused {

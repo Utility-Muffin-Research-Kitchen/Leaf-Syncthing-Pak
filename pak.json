@@ -1,12 +1,12 @@
 {
   "id": "org.umrk.syncthing",
-  "name": "Syncthing (B2 development)",
+  "name": "Syncthing (B3 development)",
   "platform": "mlp1",
-  "pak_version": "0.0.0-b2",
+  "pak_version": "0.0.0-b3",
   "min_jawaka_version": "0.5.5",
   "author": "Utility Muffin Research Kitchen",
   "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
-  "description": "Non-production B2 package with a supervised controller and native device UI.",
+  "description": "Non-production B3 package with protected folder onboarding and lifecycle integration.",
   "service": {
     "schema": 1,
     "id": "org.umrk.syncthing",

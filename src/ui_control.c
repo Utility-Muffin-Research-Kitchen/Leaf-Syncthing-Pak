@@ -4,6 +4,7 @@
 #include "ls_framed_socket.h"
 
 #include <stdatomic.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,39 @@ static int ls_copy_json(char *target, size_t size, const cJSON *value) {
     return 0;
 }
 
+static int ls_copy_optional_json(char *target, size_t size, const cJSON *value) {
+    if (!value) {
+        if (!target || size == 0) return -1;
+        target[0] = '\0';
+        return 0;
+    }
+    return ls_copy_json(target, size, value);
+}
+
+static int ls_nonnegative_int(const cJSON *value, int *target) {
+    if (!cJSON_IsNumber(value) || value->valuedouble < 0 || value->valuedouble > INT_MAX) return -1;
+    *target = value->valueint;
+    return 0;
+}
+
+static int ls_optional_nonnegative_int(const cJSON *value, int *target) {
+    if (!value) {
+        *target = 0;
+        return 0;
+    }
+    return ls_nonnegative_int(value, target);
+}
+
+static int ls_optional_nonnegative_bytes(const cJSON *value, long long *target) {
+    if (!value) {
+        *target = 0;
+        return 0;
+    }
+    if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
+    *target = (long long)value->valuedouble;
+    return 0;
+}
+
 static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *upstream;
     const cJSON *game;
@@ -33,6 +67,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *logging;
     const cJSON *storage;
     const cJSON *diagnostics;
+    const cJSON *onboarding;
     const cJSON *cards;
     const cJSON *folders;
     const cJSON *peers;
@@ -215,6 +250,35 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
                          cJSON_GetObjectItemCaseSensitive(diagnostics, "last_exported")) != 0) return -1;
     }
 
+    onboarding = cJSON_GetObjectItemCaseSensitive(result, "onboarding");
+    if (onboarding) {
+        ls_ui_onboarding *plan = &status->onboarding;
+        if (!cJSON_IsObject(onboarding) ||
+            ls_copy_json(plan->plan_id, sizeof(plan->plan_id), cJSON_GetObjectItemCaseSensitive(onboarding, "plan_id")) != 0 ||
+            strlen(plan->plan_id) != 32u ||
+            ls_copy_json(plan->source_id, sizeof(plan->source_id), cJSON_GetObjectItemCaseSensitive(onboarding, "source_id")) != 0 ||
+            ls_copy_json(plan->card_id, sizeof(plan->card_id), cJSON_GetObjectItemCaseSensitive(onboarding, "card_id")) != 0 ||
+            ls_copy_json(plan->kind, sizeof(plan->kind), cJSON_GetObjectItemCaseSensitive(onboarding, "kind")) != 0 ||
+            ls_copy_json(plan->folder_type, sizeof(plan->folder_type), cJSON_GetObjectItemCaseSensitive(onboarding, "folder_type")) != 0 ||
+            ls_copy_json(plan->folder_id, sizeof(plan->folder_id), cJSON_GetObjectItemCaseSensitive(onboarding, "folder_id")) != 0 ||
+            ls_copy_json(plan->label, sizeof(plan->label), cJSON_GetObjectItemCaseSensitive(onboarding, "label")) != 0 ||
+            ls_copy_json(plan->path, sizeof(plan->path), cJSON_GetObjectItemCaseSensitive(onboarding, "path")) != 0 ||
+            ls_copy_json(plan->expires_at, sizeof(plan->expires_at), cJSON_GetObjectItemCaseSensitive(onboarding, "expires_at")) != 0 ||
+            ls_nonnegative_int(cJSON_GetObjectItemCaseSensitive(onboarding, "file_count"), &plan->file_count) != 0 ||
+            ls_nonnegative_int(cJSON_GetObjectItemCaseSensitive(onboarding, "directory_count"), &plan->directory_count) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(onboarding, "content_bytes"), &plan->content_bytes) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(onboarding, "available_bytes"), &plan->available_bytes) != 0 ||
+            ls_nonnegative_int(cJSON_GetObjectItemCaseSensitive(onboarding, "peer_count"), &plan->peer_count) != 0 ||
+            plan->peer_count < 1) return -1;
+        value = cJSON_GetObjectItemCaseSensitive(onboarding, "snapshot_possible");
+        if (!cJSON_IsBool(value)) return -1;
+        plan->snapshot_possible = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(onboarding, "states_warning");
+        if (!cJSON_IsBool(value)) return -1;
+        plan->states_warning = cJSON_IsTrue(value);
+        status->onboarding_present = true;
+    }
+
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
     folders = cJSON_GetObjectItemCaseSensitive(result, "folders");
     peers = cJSON_GetObjectItemCaseSensitive(result, "peers");
@@ -232,6 +296,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         ls_ui_card *card = &status->cards[index];
         if (!cJSON_IsObject(item) ||
             ls_copy_json(card->id, sizeof(card->id), cJSON_GetObjectItemCaseSensitive(item, "id")) != 0 ||
+            ls_copy_optional_json(card->source_id, sizeof(card->source_id), cJSON_GetObjectItemCaseSensitive(item, "source_id")) != 0 ||
             ls_copy_json(card->id_suffix, sizeof(card->id_suffix), cJSON_GetObjectItemCaseSensitive(item, "id_suffix")) != 0 ||
             ls_copy_json(card->slot, sizeof(card->slot), cJSON_GetObjectItemCaseSensitive(item, "slot")) != 0 ||
             ls_copy_json(card->root, sizeof(card->root), cJSON_GetObjectItemCaseSensitive(item, "root")) != 0 ||
@@ -290,7 +355,10 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
             ls_copy_json(folder->type, sizeof(folder->type), cJSON_GetObjectItemCaseSensitive(item, "type")) != 0 ||
             ls_copy_json(folder->state, sizeof(folder->state), cJSON_GetObjectItemCaseSensitive(item, "state")) != 0 ||
             ls_copy_json(folder->last_sync, sizeof(folder->last_sync), cJSON_GetObjectItemCaseSensitive(item, "last_sync")) != 0 ||
-            ls_copy_json(folder->versioning, sizeof(folder->versioning), cJSON_GetObjectItemCaseSensitive(item, "versioning")) != 0) return -1;
+            ls_copy_json(folder->versioning, sizeof(folder->versioning), cJSON_GetObjectItemCaseSensitive(item, "versioning")) != 0 ||
+            ls_copy_optional_json(folder->first_sync_state, sizeof(folder->first_sync_state), cJSON_GetObjectItemCaseSensitive(item, "first_sync_state")) != 0 ||
+            ls_copy_optional_json(folder->snapshot_name, sizeof(folder->snapshot_name), cJSON_GetObjectItemCaseSensitive(item, "snapshot_name")) != 0 ||
+            ls_copy_optional_json(folder->first_sync_message, sizeof(folder->first_sync_message), cJSON_GetObjectItemCaseSensitive(item, "first_sync_message")) != 0) return -1;
         value = cJSON_GetObjectItemCaseSensitive(item, "paused");
         if (!cJSON_IsBool(value)) return -1;
         folder->paused = cJSON_IsTrue(value);
@@ -303,6 +371,11 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(item, "global_bytes");
         if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
         folder->global_bytes = (long long)value->valuedouble;
+        if (ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "local_items"), &folder->local_items) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "global_items"), &folder->global_items) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_files"), &folder->snapshot_files) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_directories"), &folder->snapshot_directories) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "snapshot_bytes"), &folder->snapshot_bytes) != 0) return -1;
         value = cJSON_GetObjectItemCaseSensitive(item, "peer_count");
         if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
         folder->peer_count = value->valueint;
@@ -381,12 +454,13 @@ malformed:
     return -1;
 }
 
-static int ls_ui_exchange(const char *socket_path,
-                          const char *operation,
-                          cJSON *arguments,
-                          ls_ui_status *status,
-                          char *error,
-                          size_t error_size) {
+static int ls_ui_exchange_timeout(const char *socket_path,
+                                  const char *operation,
+                                  cJSON *arguments,
+                                  ls_ui_status *status,
+                                  char *error,
+                                  size_t error_size,
+                                  int timeout_ms) {
     char request_id[64];
     char *encoded = NULL;
     char *response_payload = NULL;
@@ -394,7 +468,7 @@ static int ls_ui_exchange(const char *socket_path,
     cJSON *request = NULL;
     int result = -1;
 
-    if (!socket_path || !operation || !arguments || !status) goto done;
+    if (!socket_path || !operation || !arguments || !status || timeout_ms <= 0) goto done;
     snprintf(request_id, sizeof(request_id), "ui-%u",
              atomic_fetch_add_explicit(&ls_request_sequence, 1u, memory_order_relaxed));
     request = cJSON_CreateObject();
@@ -405,7 +479,7 @@ static int ls_ui_exchange(const char *socket_path,
     arguments = NULL;
     encoded = cJSON_PrintUnformatted(request);
     if (!encoded || ls_frame_request(socket_path, encoded, strlen(encoded),
-                                     &response_payload, &response_size, 10000) != 0) {
+                                     &response_payload, &response_size, timeout_ms) != 0) {
         ls_error(error, error_size, "Syncthing controller is unavailable");
         goto done;
     }
@@ -417,6 +491,16 @@ done:
     cJSON_free(encoded);
     free(response_payload);
     return result;
+}
+
+static int ls_ui_exchange(const char *socket_path,
+                          const char *operation,
+                          cJSON *arguments,
+                          ls_ui_status *status,
+                          char *error,
+                          size_t error_size) {
+    return ls_ui_exchange_timeout(socket_path, operation, arguments, status,
+                                  error, error_size, 10000);
 }
 
 int ls_ui_status_get(const char *socket_path, ls_ui_status *status,
@@ -489,6 +573,90 @@ int ls_ui_folder_action(const char *socket_path, const char *operation,
 invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create folder request");
+    return -1;
+}
+
+static bool ls_ui_valid_folder_type(const char *folder_type) {
+    return folder_type && (strcmp(folder_type, "sendonly") == 0 ||
+        strcmp(folder_type, "sendreceive") == 0 || strcmp(folder_type, "receiveonly") == 0);
+}
+
+int ls_ui_folder_onboard_plan(const char *socket_path, const char *source_id,
+                              const char *kind, const char *folder_type,
+                              ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !source_id || !kind ||
+        (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0) ||
+        !ls_ui_valid_folder_type(folder_type) ||
+        !cJSON_AddStringToObject(arguments, "source_id", source_id) ||
+        !cJSON_AddStringToObject(arguments, "kind", kind) ||
+        !cJSON_AddStringToObject(arguments, "folder_type", folder_type)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.onboard.plan", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder review request");
+    return -1;
+}
+
+int ls_ui_folder_onboard_create(const char *socket_path, const char *plan_id,
+                                bool states_warning_acknowledged,
+                                bool manual_edit_warning_acknowledged,
+                                ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !plan_id || strlen(plan_id) != 32u ||
+        !manual_edit_warning_acknowledged ||
+        !cJSON_AddStringToObject(arguments, "plan_id", plan_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true) ||
+        !cJSON_AddBoolToObject(arguments, "states_warning_acknowledged", states_warning_acknowledged) ||
+        !cJSON_AddBoolToObject(arguments, "manual_edit_warning_acknowledged", manual_edit_warning_acknowledged)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.onboard.create", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create managed folder request");
+    return -1;
+}
+
+int ls_ui_folder_first_sync_prepare(const char *socket_path, const char *folder_id,
+                                    ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true) ||
+        !cJSON_AddBoolToObject(arguments, "snapshot_limit_acknowledged", true)) goto invalid;
+    return ls_ui_exchange_timeout(socket_path, "folder.first-sync.prepare", arguments,
+                                  status, error, error_size, 30 * 60 * 1000);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create first-sync preparation request");
+    return -1;
+}
+
+int ls_ui_folder_first_sync_start(const char *socket_path, const char *folder_id,
+                                  ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true) ||
+        !cJSON_AddBoolToObject(arguments, "hub_versioning_acknowledged", true)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.first-sync.start", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create first-sync start request");
+    return -1;
+}
+
+int ls_ui_folder_type_set(const char *socket_path, const char *folder_id,
+                          const char *folder_type, ls_ui_status *status,
+                          char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id || !ls_ui_valid_folder_type(folder_type) ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "folder_type", folder_type) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.type.set", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder direction request");
     return -1;
 }
 

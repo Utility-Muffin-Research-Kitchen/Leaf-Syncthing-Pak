@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -61,13 +62,7 @@ func (runner Runner) Run(ctx context.Context) error {
 		}
 	}
 	defer session.Close()
-	folderControls, err := newFolderControlStore(
-		filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName),
-		session.Folders,
-	)
-	if err != nil {
-		return fmt.Errorf("load folder control state: %w", err)
-	}
+	folderControls := session.FolderControls
 	logging, err := newLoggingManager(
 		filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", loggingStateName), nil,
 	)
@@ -107,6 +102,8 @@ func (runner Runner) Run(ctx context.Context) error {
 		}
 	}
 	deviceUI, _ := upstream.(uiUpstream)
+	b3Folders, _ := upstream.(b3FolderUpstream)
+	onboarding := newOnboardingManager(runner.OnboardingOptions)
 	var browserGateway *gatewayserver.Manager
 	if gatewayUpstream, ok := upstream.(gatewayUpstream); ok {
 		transport := gatewayUpstream.GatewayTransport()
@@ -144,6 +141,7 @@ func (runner Runner) Run(ctx context.Context) error {
 	gameState := session.State
 	var status atomic.Value
 	initialStatus := controlStatus(session, gameState, cardInventory, folderControls.Snapshot())
+	initialStatus = applyFirstSyncStatus(initialStatus, session.FirstSync, folderControls)
 	loggingStatus := logging.Status()
 	initialStatus.Logging = &loggingStatus
 	initialStatus.Diagnostics = &uicontrol.DiagnosticsStatus{}
@@ -176,6 +174,12 @@ func (runner Runner) Run(ctx context.Context) error {
 			uicontrol.OperationFolderRescan, uicontrol.OperationFolderRename, uicontrol.OperationFolderInspect,
 			uicontrol.OperationDeviceAdd, uicontrol.OperationDeviceRename)
 	}
+	if b3Folders != nil {
+		initialStatus.Capabilities = append(initialStatus.Capabilities,
+			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOnboardCreate,
+			uicontrol.OperationFolderFirstSyncPrepare, uicontrol.OperationFolderFirstSyncStart,
+			uicontrol.OperationFolderTypeSet)
+	}
 	if !foreignConflict.Empty() {
 		initialStatus.Upstream.State = "conflict"
 		initialStatus.Issues = append(initialStatus.Issues, uicontrol.Issue{
@@ -187,17 +191,17 @@ func (runner Runner) Run(ctx context.Context) error {
 		current := status.Load().(uicontrol.Status)
 		loggingStatus := logging.Status()
 		current.Logging = &loggingStatus
-		if deviceUI == nil || current.Upstream.State != "running" {
-			return current
+		if deviceUI != nil && current.Upstream.State == "running" {
+			refreshContext, refreshCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			live, refreshErr := deviceUI.ReadUIStatus(refreshContext, session.Folders, session.Identity.DeviceID)
+			refreshCancel()
+			if refreshErr != nil {
+				current = applyLiveStatusError(current)
+			} else {
+				current = applyLiveStatus(current, live)
+			}
 		}
-		refreshContext, refreshCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		live, refreshErr := deviceUI.ReadUIStatus(refreshContext, session.Folders, session.Identity.DeviceID)
-		refreshCancel()
-		if refreshErr != nil {
-			current = applyLiveStatusError(current)
-		} else {
-			current = applyLiveStatus(current, live)
-		}
+		current = applyFirstSyncStatus(current, session.FirstSync, folderControls)
 		status.Store(current)
 		return current
 	}
@@ -222,11 +226,193 @@ func (runner Runner) Run(ctx context.Context) error {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The card was enrolled but inventory refresh failed"}
 			}
 			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
 			if storage, storageErr := storageInventory(inventory); storageErr == nil {
 				updated.Storage = &storage
 			}
 			status.Store(updated)
 			return updated, nil
+		},
+		PlanFolder: func(sourceID, kind, folderType string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("folder setup is unavailable"))
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			planContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			plan, planErr := onboarding.Plan(planContext, sourceID, kind, folderType, session.Identity.DeviceID, inventory, session.Folders, b3Folders)
+			if planErr != nil {
+				return uicontrol.Status{}, b3OperationError(planErr)
+			}
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			updated.Onboarding = controlOnboardingStatus(plan)
+			status.Store(updated)
+			return updated, nil
+		},
+		CreateFolder: func(planID string, statesAcknowledged, manualAcknowledged bool) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("folder setup is unavailable"))
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			createContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			folder, createErr := onboarding.Create(createContext, planID, session.Identity.DeviceID,
+				statesAcknowledged, manualAcknowledged, inventory, session.Folders, folderControls, b3Folders)
+			if createErr != nil {
+				return uicontrol.Status{}, b3OperationError(createErr)
+			}
+			session.Folders = append(session.Folders, folder)
+			session.FirstSync.Register(folder.ID)
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			updated.Onboarding = nil
+			if storage, storageErr := storageInventory(inventory); storageErr == nil {
+				updated.Storage = &storage
+			}
+			status.Store(updated)
+			return updated, nil
+		},
+		PrepareFirstSync: func(folderID string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("first sync is unavailable"))
+			}
+			current := refreshUIStatus()
+			row, rowFound := findFolder(current, folderID)
+			folder, _, configured := findConfiguredFolder(session.Folders, folderID)
+			controlState := folderControls.Snapshot()[folderID]
+			if !rowFound || !configured || !folderSafeForAction(row) || !controlState.FirstSync || folder.Type == "sendonly" {
+				return uicontrol.Status{}, b3OperationError(errors.New("this folder is not ready for a receive-capable first-sync snapshot"))
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			if !cardOK || !usableEnrolledCard(card) {
+				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
+			}
+			prepareContext, cancel := context.WithTimeout(ctx, 30*time.Minute)
+			defer cancel()
+			if _, prepareErr := session.FirstSync.Prepare(prepareContext, folder, card, folderControls); prepareErr != nil {
+				return uicontrol.Status{}, b3OperationError(prepareErr)
+			}
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			if storage, storageErr := storageInventory(inventory); storageErr == nil {
+				updated.Storage = &storage
+			}
+			status.Store(updated)
+			return refreshUIStatus(), nil
+		},
+		StartFirstSync: func(folderID string, hubAcknowledged bool) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("first sync is unavailable"))
+			}
+			folder, folderIndex, configured := findConfiguredFolder(session.Folders, folderID)
+			if !configured || !folderControls.Snapshot()[folderID].FirstSync {
+				return uicontrol.Status{}, b3OperationError(errors.New("this folder does not have a pending first sync"))
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			if !cardOK || !usableEnrolledCard(card) {
+				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
+			}
+			if completeErr := session.FirstSync.Complete(folder, card, folderControls, hubAcknowledged); completeErr != nil {
+				return uicontrol.Status{}, b3OperationError(completeErr)
+			}
+			pauseSet := requiredOfflinePauseSet(session.Folders, inventory, folderControls.Snapshot())
+			if !pauseSet[folderID] {
+				actionContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				if unpauseErr := b3Folders.SetFolderPaused(actionContext, folderID, false); unpauseErr != nil {
+					return uicontrol.Status{}, b3OperationError(unpauseErr)
+				}
+				session.Folders[folderIndex].Paused = false
+				if folderControls.Snapshot()[folderID].PendingRescan {
+					if rescanErr := b3Folders.RescanFolder(actionContext, folderID); rescanErr != nil {
+						return uicontrol.Status{}, b3OperationError(rescanErr)
+					}
+					if stateErr := folderControls.SetPendingRescan(folderID, false); stateErr != nil {
+						return uicontrol.Status{}, b3OperationError(stateErr)
+					}
+				}
+			}
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			if storage, storageErr := storageInventory(inventory); storageErr == nil {
+				updated.Storage = &storage
+			}
+			status.Store(updated)
+			return refreshUIStatus(), nil
+		},
+		SetFolderType: func(folderID, folderType string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			if b3Folders == nil {
+				return uicontrol.Status{}, b3OperationError(errors.New("folder type control is unavailable"))
+			}
+			current := refreshUIStatus()
+			row, rowFound := findFolder(current, folderID)
+			folder, folderIndex, configured := findConfiguredFolder(session.Folders, folderID)
+			if !rowFound || !configured || !folderSafeForAction(row) {
+				return uicontrol.Status{}, b3OperationError(errors.New("the folder safety checks must pass before changing its type"))
+			}
+			if folder.Type == folderType {
+				return current, nil
+			}
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, b3OperationError(inventoryErr)
+			}
+			card, cardOK := cardForConfiguredFolder(folder, inventory)
+			if !cardOK || !usableEnrolledCard(card) {
+				return uicontrol.Status{}, b3OperationError(errors.New("the enrolled physical card is unavailable"))
+			}
+			actionContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if pauseErr := b3Folders.SetFolderPaused(actionContext, folderID, true); pauseErr != nil {
+				return uicontrol.Status{}, b3OperationError(pauseErr)
+			}
+			crossesSendOnly := (folder.Type == "sendonly") != (folderType == "sendonly")
+			if crossesSendOnly {
+				if invalidateErr := session.FirstSync.Invalidate(folder, card, folderControls); invalidateErr != nil {
+					return uicontrol.Status{}, b3OperationError(invalidateErr)
+				}
+			}
+			target := folder
+			target.Type = folderType
+			target.Paused = true
+			if folderType != "sendonly" {
+				target.VersioningType = "simple"
+				target.VersioningFSPath = filepath.Join(card.Source.UserdataPath, leaf.AppStateName, "versions", folder.Kind)
+				target.VersioningFSType = "basic"
+				if err := ensureSafeDirectoryChain(card.Source.Root, target.VersioningFSPath); err != nil {
+					return uicontrol.Status{}, b3OperationError(err)
+				}
+			}
+			if typeErr := b3Folders.SetManagedFolderType(actionContext, target); typeErr != nil {
+				return uicontrol.Status{}, b3OperationError(typeErr)
+			}
+			session.Folders[folderIndex] = target
+			pauseSet := requiredOfflinePauseSet(session.Folders, inventory, folderControls.Snapshot())
+			if !pauseSet[folderID] {
+				if unpauseErr := b3Folders.SetFolderPaused(actionContext, folderID, false); unpauseErr != nil {
+					return uicontrol.Status{}, b3OperationError(unpauseErr)
+				}
+				session.Folders[folderIndex].Paused = false
+			}
+			updated := applyInventory(status.Load().(uicontrol.Status), inventory, session.Folders, folderControls.Snapshot())
+			updated = applyFirstSyncStatus(updated, session.FirstSync, folderControls)
+			status.Store(updated)
+			return refreshUIStatus(), nil
 		},
 		SetNetworkProfile: func(profile string) (uicontrol.Status, *uicontrol.ProtocolError) {
 			if network == nil {
@@ -625,6 +811,50 @@ func folderOperationFailure() *uicontrol.ProtocolError {
 	return &uicontrol.ProtocolError{Code: "operation-failed", Message: "The folder request could not be completed safely"}
 }
 
+func b3OperationError(err error) *uicontrol.ProtocolError {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, cards.ErrForeignMarker):
+		return &uicontrol.ProtocolError{Code: "foreign-folder-manager", Message: "A default .stfolder shows that another Syncthing manages this directory"}
+	case strings.Contains(message, "insufficient free space") || strings.Contains(message, "enospc"):
+		return &uicontrol.ProtocolError{Code: "insufficient-space", Message: "The card does not have enough free space for a safety snapshot; choose send-only or cancel"}
+	case strings.Contains(message, "at least one syncthing peer"):
+		return &uicontrol.ProtocolError{Code: "no-peers", Message: "Add at least one Syncthing peer before creating a folder"}
+	case strings.Contains(message, "absent or expired"):
+		return &uicontrol.ProtocolError{Code: "plan-expired", Message: "The folder setup review expired; review the current card again"}
+	case strings.Contains(message, "warnings must be acknowledged"):
+		return &uicontrol.ProtocolError{Code: "warning-required", Message: "Acknowledge the folder safety warnings before creating it"}
+	default:
+		return &uicontrol.ProtocolError{Code: "operation-failed", Message: "The folder request could not be completed safely"}
+	}
+}
+
+func controlOnboardingStatus(plan onboardingPlan) *uicontrol.OnboardingStatus {
+	available := int64(plan.AvailableBytes)
+	if plan.AvailableBytes > uint64(^uint64(0)>>1) {
+		available = int64(^uint64(0) >> 1)
+	}
+	return &uicontrol.OnboardingStatus{
+		PlanID: plan.ID, SourceID: plan.SourceID, CardID: plan.CardID, Kind: plan.Kind,
+		FolderType: plan.FolderType, FolderID: plan.FolderID, Label: plan.Label, Path: plan.Path,
+		FileCount: plan.FileCount, DirectoryCount: plan.DirectoryCount, ContentBytes: plan.ContentBytes,
+		AvailableBytes: available, SnapshotPossible: plan.SnapshotPossible, PeerCount: plan.PeerCount,
+		StatesWarning: plan.StatesWarning, ExpiresAt: plan.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func findConfiguredFolder(folders []syncthingconfig.ConfiguredFolder, folderID string) (syncthingconfig.ConfiguredFolder, int, bool) {
+	for index, folder := range folders {
+		if folder.ID == folderID {
+			return folder, index, true
+		}
+	}
+	return syncthingconfig.ConfiguredFolder{}, -1, false
+}
+
 func controlStatus(session *Session, game life1.GameState, inventory []cards.Card, folderState ...map[string]folderControlRecord) uicontrol.Status {
 	status := uicontrol.Status{
 		Controller: "running",
@@ -681,7 +911,7 @@ func applyCardInventory(status uicontrol.Status, inventory []cards.Card) uicontr
 			identifier = "source:" + card.Source.ID
 		}
 		row := uicontrol.CardStatus{
-			ID: identifier, IDSuffix: identitySuffix(card.Identity.ID), Slot: sourceLabel(card.Source),
+			ID: identifier, SourceID: card.Source.ID, IDSuffix: identitySuffix(card.Identity.ID), Slot: sourceLabel(card.Source),
 			Root: card.Source.Root, State: string(card.State), Enrolled: card.Identity.ID != "",
 			Present: card.Present, Writable: card.Writable, DuplicateID: card.DuplicateID,
 			RetainedBytes: card.RetainedBytes, Issues: []uicontrol.Issue{},

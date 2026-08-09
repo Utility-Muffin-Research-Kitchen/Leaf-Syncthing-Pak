@@ -17,9 +17,10 @@ import (
 const folderControlStateName = "folder-control.json"
 
 type folderControlRecord struct {
-	Manual        bool `json:"manual"`
-	FirstSync     bool `json:"first_sync"`
-	PendingRescan bool `json:"pending_rescan"`
+	Manual         bool   `json:"manual"`
+	FirstSync      bool   `json:"first_sync"`
+	FirstSyncEpoch uint64 `json:"first_sync_epoch"`
+	PendingRescan  bool   `json:"pending_rescan"`
 }
 
 type folderControlDocument struct {
@@ -45,8 +46,12 @@ func newFolderControlStore(path string, folders []syncthing.ConfiguredFolder) (*
 	configured := make(map[string]bool, len(folders))
 	for _, folder := range folders {
 		configured[folder.ID] = true
-		if _, ok := records[folder.ID]; !ok {
-			records[folder.ID] = folderControlRecord{FirstSync: true}
+		if record, ok := records[folder.ID]; !ok {
+			records[folder.ID] = folderControlRecord{FirstSync: true, FirstSyncEpoch: 1}
+			changed = true
+		} else if record.FirstSyncEpoch == 0 {
+			record.FirstSyncEpoch = 1
+			records[folder.ID] = record
 			changed = true
 		}
 	}
@@ -97,6 +102,72 @@ func (store *folderControlStore) SetPendingRescan(folderID string, pending bool)
 	record.PendingRescan = pending
 	store.records[folderID] = record
 	return store.persistLocked()
+}
+
+func (store *folderControlStore) SetFirstSync(folderID string, pending bool) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok {
+		return errors.New("folder control state does not contain this folder")
+	}
+	if record.FirstSync == pending {
+		return nil
+	}
+	record.FirstSync = pending
+	store.records[folderID] = record
+	return store.persistLocked()
+}
+
+func (store *folderControlStore) RequireFirstSync(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok {
+		return errors.New("folder control state does not contain this folder")
+	}
+	if record.FirstSyncEpoch == ^uint64(0) {
+		return errors.New("folder first-sync epoch is exhausted")
+	}
+	record.FirstSync = true
+	record.FirstSyncEpoch++
+	store.records[folderID] = record
+	return store.persistLocked()
+}
+
+func (store *folderControlStore) Add(folderID string) error {
+	if !stringsManagedFolderID(folderID) {
+		return errors.New("folder control state contains an invalid folder id")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, ok := store.records[folderID]; ok {
+		return errors.New("folder control state already contains this folder")
+	}
+	if len(store.records) >= 16 {
+		return errors.New("folder control state exceeds the managed-folder limit")
+	}
+	store.records[folderID] = folderControlRecord{FirstSync: true, FirstSyncEpoch: 1}
+	if err := store.persistLocked(); err != nil {
+		delete(store.records, folderID)
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) Remove(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok {
+		return nil
+	}
+	delete(store.records, folderID)
+	if err := store.persistLocked(); err != nil {
+		store.records[folderID] = record
+		return err
+	}
+	return nil
 }
 
 func readFolderControlState(path string) (map[string]folderControlRecord, bool, error) {

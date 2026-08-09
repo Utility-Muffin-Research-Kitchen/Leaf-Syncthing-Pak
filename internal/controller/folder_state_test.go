@@ -16,7 +16,7 @@ func TestFolderControlStatePersistsManualAndPendingReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	initial := store.Snapshot()[folder.ID]
-	if !initial.FirstSync || initial.Manual || initial.PendingRescan {
+	if !initial.FirstSync || initial.FirstSyncEpoch != 1 || initial.Manual || initial.PendingRescan {
 		t.Fatalf("initial state = %+v", initial)
 	}
 	if err := store.SetManual(folder.ID, true); err != nil {
@@ -25,12 +25,18 @@ func TestFolderControlStatePersistsManualAndPendingReasons(t *testing.T) {
 	if err := store.SetPendingRescan(folder.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SetFirstSync(folder.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequireFirstSync(folder.ID); err != nil {
+		t.Fatal(err)
+	}
 	reloaded, err := newFolderControlStore(path, []syncthing.ConfiguredFolder{folder})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := reloaded.Snapshot()[folder.ID]
-	if !got.FirstSync || !got.Manual || !got.PendingRescan {
+	if !got.FirstSync || got.FirstSyncEpoch != 2 || !got.Manual || !got.PendingRescan {
 		t.Fatalf("reloaded state = %+v", got)
 	}
 

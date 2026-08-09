@@ -10,26 +10,31 @@ import (
 )
 
 const (
-	Version                    = 1
-	OperationGet               = "status.get"
-	OperationEnrollCard        = "card.enroll"
-	OperationNetworkSet        = "network.profile.set"
-	OperationGatewayOpen       = "gateway.open"
-	OperationGatewayKeepAlive  = "gateway.keepalive"
-	OperationGatewayClose      = "gateway.close"
-	OperationGatewayExtend     = "gateway.extend"
-	OperationGatewayRevoke     = "gateway.revoke-all"
-	OperationFolderPause       = "folder.pause"
-	OperationFolderResume      = "folder.resume"
-	OperationFolderRescan      = "folder.rescan"
-	OperationFolderRename      = "folder.rename"
-	OperationFolderInspect     = "folder.inspect"
-	OperationDeviceAdd         = "device.add"
-	OperationDeviceRename      = "device.rename"
-	OperationResetPrepare      = "reset.prepare"
-	OperationLogLevelSet       = "log.level.set"
-	OperationDiagnosticsExport = "diagnostics.export"
-	MaxIdentifier              = 64
+	Version                         = 1
+	OperationGet                    = "status.get"
+	OperationEnrollCard             = "card.enroll"
+	OperationNetworkSet             = "network.profile.set"
+	OperationGatewayOpen            = "gateway.open"
+	OperationGatewayKeepAlive       = "gateway.keepalive"
+	OperationGatewayClose           = "gateway.close"
+	OperationGatewayExtend          = "gateway.extend"
+	OperationGatewayRevoke          = "gateway.revoke-all"
+	OperationFolderPause            = "folder.pause"
+	OperationFolderResume           = "folder.resume"
+	OperationFolderRescan           = "folder.rescan"
+	OperationFolderRename           = "folder.rename"
+	OperationFolderInspect          = "folder.inspect"
+	OperationFolderOnboardPlan      = "folder.onboard.plan"
+	OperationFolderOnboardCreate    = "folder.onboard.create"
+	OperationFolderFirstSyncPrepare = "folder.first-sync.prepare"
+	OperationFolderFirstSyncStart   = "folder.first-sync.start"
+	OperationFolderTypeSet          = "folder.type.set"
+	OperationDeviceAdd              = "device.add"
+	OperationDeviceRename           = "device.rename"
+	OperationResetPrepare           = "reset.prepare"
+	OperationLogLevelSet            = "log.level.set"
+	OperationDiagnosticsExport      = "diagnostics.export"
+	MaxIdentifier                   = 64
 )
 
 type Request struct {
@@ -63,6 +68,7 @@ type Status struct {
 	Logging      *LoggingStatus     `json:"logging,omitempty"`
 	Storage      *StorageStatus     `json:"storage,omitempty"`
 	Diagnostics  *DiagnosticsStatus `json:"diagnostics,omitempty"`
+	Onboarding   *OnboardingStatus  `json:"onboarding,omitempty"`
 	Cards        []CardStatus       `json:"cards"`
 	Folders      []FolderStatus     `json:"folders"`
 	Peers        []PeerStatus       `json:"peers,omitempty"`
@@ -123,6 +129,25 @@ type DiagnosticsStatus struct {
 	LastExported   string `json:"last_exported"`
 }
 
+type OnboardingStatus struct {
+	PlanID           string `json:"plan_id"`
+	SourceID         string `json:"source_id"`
+	CardID           string `json:"card_id"`
+	Kind             string `json:"kind"`
+	FolderType       string `json:"folder_type"`
+	FolderID         string `json:"folder_id"`
+	Label            string `json:"label"`
+	Path             string `json:"path"`
+	FileCount        int    `json:"file_count"`
+	DirectoryCount   int    `json:"directory_count"`
+	ContentBytes     int64  `json:"content_bytes"`
+	AvailableBytes   int64  `json:"available_bytes"`
+	SnapshotPossible bool   `json:"snapshot_possible"`
+	PeerCount        int    `json:"peer_count"`
+	StatesWarning    bool   `json:"states_warning"`
+	ExpiresAt        string `json:"expires_at"`
+}
+
 type UpstreamStatus struct {
 	State    string `json:"state"`
 	Version  string `json:"version"`
@@ -146,6 +171,7 @@ type RecoveryStatus struct {
 
 type CardStatus struct {
 	ID            string  `json:"id"`
+	SourceID      string  `json:"source_id,omitempty"`
 	IDSuffix      string  `json:"id_suffix"`
 	Slot          string  `json:"slot"`
 	Root          string  `json:"root"`
@@ -159,24 +185,32 @@ type CardStatus struct {
 }
 
 type FolderStatus struct {
-	ID            string   `json:"id"`
-	Label         string   `json:"label"`
-	CardID        string   `json:"card_id"`
-	Kind          string   `json:"kind"`
-	Path          string   `json:"path"`
-	Type          string   `json:"type"`
-	State         string   `json:"state"`
-	Paused        bool     `json:"paused"`
-	PauseReasons  []string `json:"pause_reasons"`
-	PendingRescan bool     `json:"pending_rescan"`
-	LocalBytes    int64    `json:"local_bytes"`
-	GlobalBytes   int64    `json:"global_bytes"`
-	PeerCount     int      `json:"peer_count"`
-	LastSync      string   `json:"last_sync"`
-	Versioning    string   `json:"versioning"`
-	ConflictCount int      `json:"conflict_count,omitempty"`
-	Conflicts     []string `json:"conflicts,omitempty"`
-	Issues        []Issue  `json:"issues"`
+	ID                  string   `json:"id"`
+	Label               string   `json:"label"`
+	CardID              string   `json:"card_id"`
+	Kind                string   `json:"kind"`
+	Path                string   `json:"path"`
+	Type                string   `json:"type"`
+	State               string   `json:"state"`
+	Paused              bool     `json:"paused"`
+	PauseReasons        []string `json:"pause_reasons"`
+	PendingRescan       bool     `json:"pending_rescan"`
+	LocalBytes          int64    `json:"local_bytes"`
+	GlobalBytes         int64    `json:"global_bytes"`
+	LocalItems          int      `json:"local_items,omitempty"`
+	GlobalItems         int      `json:"global_items,omitempty"`
+	PeerCount           int      `json:"peer_count"`
+	LastSync            string   `json:"last_sync"`
+	Versioning          string   `json:"versioning"`
+	FirstSyncState      string   `json:"first_sync_state,omitempty"`
+	SnapshotName        string   `json:"snapshot_name,omitempty"`
+	SnapshotFiles       int      `json:"snapshot_files,omitempty"`
+	SnapshotDirectories int      `json:"snapshot_directories,omitempty"`
+	SnapshotBytes       int64    `json:"snapshot_bytes,omitempty"`
+	FirstSyncMessage    string   `json:"first_sync_message,omitempty"`
+	ConflictCount       int      `json:"conflict_count,omitempty"`
+	Conflicts           []string `json:"conflicts,omitempty"`
+	Issues              []Issue  `json:"issues"`
 }
 
 type PeerStatus struct {
@@ -206,6 +240,11 @@ type Operations struct {
 	GatewayAction     func(string) (Status, *ProtocolError)
 	FolderAction      func(string, string, string) (Status, *ProtocolError)
 	FolderInspect     func(string) (Status, *ProtocolError)
+	PlanFolder        func(string, string, string) (Status, *ProtocolError)
+	CreateFolder      func(string, bool, bool) (Status, *ProtocolError)
+	PrepareFirstSync  func(string) (Status, *ProtocolError)
+	StartFirstSync    func(string, bool) (Status, *ProtocolError)
+	SetFolderType     func(string, string) (Status, *ProtocolError)
 	DeviceAction      func(string, string, string) (Status, *ProtocolError)
 	PrepareReset      func(string) (Status, *ProtocolError)
 	SetLogLevel       func(string) (Status, *ProtocolError)
@@ -333,6 +372,71 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationFolderOnboardPlan:
+		if operations.PlanFolder == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		sourceID, kind, folderType, err := decodeOnboardingPlanArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.onboard.plan requires a valid source, kind, and folder type")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.PlanFolder(sourceID, kind, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderOnboardCreate:
+		if operations.CreateFolder == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		planID, statesAcknowledged, manualAcknowledged, err := decodeOnboardingCreateArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.onboard.create requires confirmation and warning acknowledgments")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.CreateFolder(planID, statesAcknowledged, manualAcknowledged)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderFirstSyncPrepare:
+		if operations.PrepareFirstSync == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, err := decodeFirstSyncPrepareArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.first-sync.prepare requires confirmation of the snapshot limitation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.PrepareFirstSync(folderID)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderFirstSyncStart:
+		if operations.StartFirstSync == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, hubAcknowledged, err := decodeFirstSyncStartArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.first-sync.start requires explicit confirmation and hub-versioning acknowledgment")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.StartFirstSync(folderID, hubAcknowledged)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderTypeSet:
+		if operations.SetFolderType == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, folderType, err := decodeFolderTypeArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.type.set requires a confirmed supported folder type")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.SetFolderType(folderID, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	case OperationDeviceAdd, OperationDeviceRename:
 		if operations.DeviceAction == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
@@ -439,6 +543,98 @@ func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
 		return "", errors.New("invalid card enrollment arguments")
 	}
 	return arguments.SourceID, nil
+}
+
+func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string, error) {
+	var arguments struct {
+		SourceID   string `json:"source_id"`
+		Kind       string `json:"kind"`
+		FolderType string `json:"folder_type"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.SourceID) ||
+		(arguments.Kind != "saves" && arguments.Kind != "states") ||
+		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") {
+		return "", "", "", errors.New("invalid onboarding plan arguments")
+	}
+	return arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+}
+
+func decodeOnboardingCreateArguments(raw json.RawMessage) (string, bool, bool, error) {
+	var arguments struct {
+		PlanID                    string `json:"plan_id"`
+		Confirmed                 bool   `json:"confirmed"`
+		StatesWarningAcknowledged bool   `json:"states_warning_acknowledged"`
+		ManualEditAcknowledged    bool   `json:"manual_edit_warning_acknowledged"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", false, false, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || len(arguments.PlanID) != 32 ||
+		!validIdentifier(arguments.PlanID) || !arguments.Confirmed || !arguments.ManualEditAcknowledged {
+		return "", false, false, errors.New("invalid onboarding creation arguments")
+	}
+	return arguments.PlanID, arguments.StatesWarningAcknowledged, arguments.ManualEditAcknowledged, nil
+}
+
+func decodeFirstSyncPrepareArguments(raw json.RawMessage) (string, error) {
+	var arguments struct {
+		FolderID                  string `json:"folder_id"`
+		Confirmed                 bool   `json:"confirmed"`
+		SnapshotLimitAcknowledged bool   `json:"snapshot_limit_acknowledged"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.FolderID) ||
+		!arguments.Confirmed || !arguments.SnapshotLimitAcknowledged {
+		return "", errors.New("invalid first-sync prepare arguments")
+	}
+	return arguments.FolderID, nil
+}
+
+func decodeFirstSyncStartArguments(raw json.RawMessage) (string, bool, error) {
+	var arguments struct {
+		FolderID                  string `json:"folder_id"`
+		Confirmed                 bool   `json:"confirmed"`
+		HubVersioningAcknowledged bool   `json:"hub_versioning_acknowledged"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", false, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.FolderID) ||
+		!arguments.Confirmed || !arguments.HubVersioningAcknowledged {
+		return "", false, errors.New("invalid first-sync start arguments")
+	}
+	return arguments.FolderID, arguments.HubVersioningAcknowledged, nil
+}
+
+func decodeFolderTypeArguments(raw json.RawMessage) (string, string, error) {
+	var arguments struct {
+		FolderID   string `json:"folder_id"`
+		FolderType string `json:"folder_type"`
+		Confirmed  bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.FolderID) || !arguments.Confirmed ||
+		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") {
+		return "", "", errors.New("invalid folder type arguments")
+	}
+	return arguments.FolderID, arguments.FolderType, nil
 }
 
 func decodeIDArguments(raw json.RawMessage, field string) (string, error) {
@@ -655,6 +851,17 @@ func (status Status) validate() error {
 	if status.Logging != nil && !oneOf(status.Logging.Level, "normal", "debug") {
 		return errors.New("invalid logging status")
 	}
+	if status.Onboarding != nil {
+		plan := status.Onboarding
+		if len(plan.PlanID) != 32 || !validIdentifier(plan.PlanID) || !validIdentifier(plan.SourceID) ||
+			plan.CardID == "" || !validIdentifier(plan.FolderID) || !validDisplayText(plan.Label, 96) ||
+			len(plan.Path) == 0 || len(plan.Path) > 1024 ||
+			!oneOf(plan.Kind, "saves", "states") || !oneOf(plan.FolderType, "sendonly", "sendreceive", "receiveonly") ||
+			plan.FileCount < 0 || plan.DirectoryCount < 0 || plan.ContentBytes < 0 || plan.AvailableBytes < 0 ||
+			plan.PeerCount < 1 || plan.ExpiresAt == "" || len(plan.ExpiresAt) > 64 {
+			return errors.New("invalid folder onboarding status")
+		}
+	}
 	if status.Storage != nil {
 		if status.Storage.SnapshotBytes < 0 || status.Storage.VersionBytes < 0 || status.Storage.SnapshotCount < 0 ||
 			status.Storage.VersionGroups < 0 || len(status.Storage.Inventory) > 128 {
@@ -680,15 +887,22 @@ func (status Status) validate() error {
 	}
 	for _, card := range status.Cards {
 		if card.ID == "" || !oneOf(card.State, "absent", "unenrolled", "enrolled", "invalid", "duplicate") ||
-			card.RetainedBytes < 0 || len(card.Issues) > 128 {
+			(card.SourceID != "" && !validIdentifier(card.SourceID)) || card.RetainedBytes < 0 || len(card.Issues) > 128 {
 			return errors.New("card status is outside protocol bounds")
 		}
 	}
 	for _, folder := range status.Folders {
-		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.PeerCount < 0 ||
+		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 || folder.PeerCount < 0 ||
+			folder.SnapshotFiles < 0 || folder.SnapshotDirectories < 0 || folder.SnapshotBytes < 0 ||
 			folder.ConflictCount < 0 || folder.ConflictCount < len(folder.Conflicts) ||
 			len(folder.Conflicts) > 64 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
 			return errors.New("folder status is outside protocol bounds")
+		}
+		if folder.FirstSyncState != "" && !oneOf(folder.FirstSyncState, "required", "preparing", "ready", "complete", "error") {
+			return errors.New("folder first-sync state is outside protocol bounds")
+		}
+		if len(folder.SnapshotName) > 96 || len(folder.FirstSyncMessage) > 240 {
+			return errors.New("folder first-sync text is outside protocol bounds")
 		}
 		for _, conflict := range folder.Conflicts {
 			if !validDisplayText(conflict, 256) {

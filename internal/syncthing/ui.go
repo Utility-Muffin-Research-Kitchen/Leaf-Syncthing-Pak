@@ -21,6 +21,8 @@ type UIFolderStatus struct {
 	State        string
 	LocalBytes   int64
 	GlobalBytes  int64
+	LocalItems   int
+	GlobalItems  int
 	NeedBytes    int64
 	ErrorCount   int
 	PullErrors   int
@@ -75,13 +77,19 @@ type uiConnections struct {
 }
 
 type uiDBStatus struct {
-	State       string `json:"state"`
-	LocalBytes  int64  `json:"localBytes"`
-	GlobalBytes int64  `json:"globalBytes"`
-	NeedBytes   int64  `json:"needBytes"`
-	Errors      int    `json:"errors"`
-	PullErrors  int    `json:"pullErrors"`
-	StateChange string `json:"stateChanged"`
+	State             string `json:"state"`
+	LocalBytes        int64  `json:"localBytes"`
+	GlobalBytes       int64  `json:"globalBytes"`
+	NeedBytes         int64  `json:"needBytes"`
+	LocalFiles        int    `json:"localFiles"`
+	LocalDirectories  int    `json:"localDirectories"`
+	LocalSymlinks     int    `json:"localSymlinks"`
+	GlobalFiles       int    `json:"globalFiles"`
+	GlobalDirectories int    `json:"globalDirectories"`
+	GlobalSymlinks    int    `json:"globalSymlinks"`
+	Errors            int    `json:"errors"`
+	PullErrors        int    `json:"pullErrors"`
+	StateChange       string `json:"stateChanged"`
 }
 
 type uiFolderStats map[string]struct {
@@ -124,7 +132,9 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		row := UIFolderStatus{
 			ID: folder.ID, State: boundedState(upstream.State), LocalBytes: nonnegative(upstream.LocalBytes),
 			GlobalBytes: nonnegative(upstream.GlobalBytes), NeedBytes: nonnegative(upstream.NeedBytes),
-			ErrorCount: nonnegativeInt(upstream.Errors), PullErrors: nonnegativeInt(upstream.PullErrors),
+			LocalItems:  boundedItemTotal(upstream.LocalFiles, upstream.LocalDirectories, upstream.LocalSymlinks),
+			GlobalItems: boundedItemTotal(upstream.GlobalFiles, upstream.GlobalDirectories, upstream.GlobalSymlinks),
+			ErrorCount:  nonnegativeInt(upstream.Errors), PullErrors: nonnegativeInt(upstream.PullErrors),
 		}
 		if entry, ok := stats[folder.ID]; ok && !entry.LastFile.At.IsZero() {
 			row.LastActivity = entry.LastFile.At.UTC().Format(time.RFC3339)
@@ -178,6 +188,19 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		return status.Peers[left].Name < status.Peers[right].Name
 	})
 	return status, nil
+}
+
+func boundedItemTotal(values ...int) int {
+	const maximum = 1_000_000_000
+	total := 0
+	for _, value := range values {
+		value = nonnegativeInt(value)
+		if value > maximum-total {
+			return maximum
+		}
+		total += value
+	}
+	return total
 }
 
 func (process *Process) SetFolderPaused(ctx context.Context, folderID string, paused bool) error {
