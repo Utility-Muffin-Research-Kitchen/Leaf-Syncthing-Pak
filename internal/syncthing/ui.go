@@ -25,6 +25,11 @@ type UIFolderStatus struct {
 	LocalItems   int
 	GlobalItems  int
 	NeedBytes    int64
+	NeedItems    int
+	RemoteState  string
+	RemotePeer   string
+	RemoteBytes  int64
+	RemoteItems  int
 	ErrorCount   int
 	PullErrors   int
 	LastActivity string
@@ -93,6 +98,7 @@ type uiDBStatus struct {
 	LocalBytes        int64  `json:"localBytes"`
 	GlobalBytes       int64  `json:"globalBytes"`
 	NeedBytes         int64  `json:"needBytes"`
+	NeedTotalItems    int    `json:"needTotalItems"`
 	LocalFiles        int    `json:"localFiles"`
 	LocalDirectories  int    `json:"localDirectories"`
 	LocalSymlinks     int    `json:"localSymlinks"`
@@ -102,6 +108,13 @@ type uiDBStatus struct {
 	Errors            int    `json:"errors"`
 	PullErrors        int    `json:"pullErrors"`
 	StateChange       string `json:"stateChanged"`
+}
+
+type uiCompletion struct {
+	NeedBytes   int64  `json:"needBytes"`
+	NeedItems   int    `json:"needItems"`
+	NeedDeletes int    `json:"needDeletes"`
+	RemoteState string `json:"remoteState"`
 }
 
 type uiFolderStats map[string]struct {
@@ -147,6 +160,10 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 	if err := process.apiJSON(ctx, http.MethodGet, "/rest/stats/folder", nil, &stats); err != nil {
 		return UIStatus{}, err
 	}
+	configuredDevices := make(map[string]uiDevice, len(devices))
+	for _, device := range devices {
+		configuredDevices[device.DeviceID] = device
+	}
 
 	for _, folder := range folders {
 		var upstream uiDBStatus
@@ -157,6 +174,7 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		row := UIFolderStatus{
 			ID: folder.ID, State: boundedState(upstream.State), LocalBytes: nonnegative(upstream.LocalBytes),
 			GlobalBytes: nonnegative(upstream.GlobalBytes), NeedBytes: nonnegative(upstream.NeedBytes),
+			NeedItems: boundedItemTotal(upstream.NeedTotalItems), RemoteState: "local-only",
 			LocalItems:  boundedItemTotal(upstream.LocalFiles, upstream.LocalDirectories, upstream.LocalSymlinks),
 			GlobalItems: boundedItemTotal(upstream.GlobalFiles, upstream.GlobalDirectories, upstream.GlobalSymlinks),
 			ErrorCount:  nonnegativeInt(upstream.Errors), PullErrors: nonnegativeInt(upstream.PullErrors),
@@ -165,6 +183,58 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 			row.LastActivity = entry.LastFile.At.UTC().Format(time.RFC3339)
 		} else if parsed, err := time.Parse(time.RFC3339Nano, upstream.StateChange); err == nil {
 			row.LastActivity = parsed.UTC().Format(time.RFC3339)
+		}
+		remoteCount := 0
+		attentionState, attentionPeer := "", ""
+		pendingPeer := ""
+		for _, deviceID := range folder.Devices {
+			if deviceID == selfDeviceID {
+				continue
+			}
+			remoteCount++
+			device, configured := configuredDevices[deviceID]
+			peerName := displayPeerName(device.Name, deviceID)
+			connection := connections.Connections[deviceID]
+			if !configured || !connection.Connected {
+				if attentionState == "" {
+					attentionState, attentionPeer = "offline", peerName
+				}
+				continue
+			}
+			if device.Paused || connection.Paused {
+				if attentionState == "" {
+					attentionState, attentionPeer = "paused", peerName
+				}
+				continue
+			}
+			var completion uiCompletion
+			completionPath := "/rest/db/completion?" + url.Values{
+				"device": []string{deviceID}, "folder": []string{folder.ID},
+			}.Encode()
+			if err := process.apiJSON(ctx, http.MethodGet, completionPath, nil, &completion); err != nil {
+				return UIStatus{}, err
+			}
+			remoteState := boundedRemoteState(completion.RemoteState)
+			if remoteState != "valid" {
+				if attentionState == "" {
+					attentionState, attentionPeer = remoteState, peerName
+				}
+				continue
+			}
+			needBytes := nonnegative(completion.NeedBytes)
+			needItems := boundedItemTotal(completion.NeedItems, completion.NeedDeletes)
+			row.RemoteBytes = boundedByteTotal(row.RemoteBytes, needBytes)
+			row.RemoteItems = boundedItemTotal(row.RemoteItems, needItems)
+			if pendingPeer == "" && (needBytes > 0 || needItems > 0) {
+				pendingPeer = peerName
+			}
+		}
+		if attentionState != "" {
+			row.RemoteState, row.RemotePeer = attentionState, attentionPeer
+		} else if row.RemoteBytes > 0 || row.RemoteItems > 0 {
+			row.RemoteState, row.RemotePeer = "syncing", pendingPeer
+		} else if remoteCount > 0 {
+			row.RemoteState = "current"
 		}
 		status.Folders[folder.ID] = row
 		status.Transfer.LocalBytes += row.LocalBytes
@@ -245,6 +315,30 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		}
 	}
 	return status, nil
+}
+
+func boundedRemoteState(value string) string {
+	switch value {
+	case "valid":
+		return value
+	case "paused":
+		return value
+	case "notSharing":
+		return "not-sharing"
+	default:
+		return "unknown"
+	}
+}
+
+func boundedByteTotal(left, right int64) int64 {
+	const maximum = int64(^uint64(0) >> 1)
+	if right < 0 {
+		return left
+	}
+	if left > maximum-right {
+		return maximum
+	}
+	return left + right
 }
 
 func displayFolderLabel(label, folderID string) string {

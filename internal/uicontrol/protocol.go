@@ -210,6 +210,12 @@ type FolderStatus struct {
 	GlobalBytes         int64    `json:"global_bytes"`
 	LocalItems          int      `json:"local_items,omitempty"`
 	GlobalItems         int      `json:"global_items,omitempty"`
+	NeedBytes           int64    `json:"need_bytes,omitempty"`
+	NeedItems           int      `json:"need_items,omitempty"`
+	RemoteState         string   `json:"remote_state,omitempty"`
+	RemotePeer          string   `json:"remote_peer,omitempty"`
+	RemoteNeedBytes     int64    `json:"remote_need_bytes,omitempty"`
+	RemoteNeedItems     int      `json:"remote_need_items,omitempty"`
 	PeerCount           int      `json:"peer_count"`
 	DeviceIDs           []string `json:"device_ids"`
 	LastSync            string   `json:"last_sync"`
@@ -1098,11 +1104,19 @@ func (status Status) validate() error {
 		}
 	}
 	for _, folder := range status.Folders {
-		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 || folder.PeerCount < 0 ||
+		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 ||
+			folder.NeedBytes < 0 || folder.NeedItems < 0 || folder.RemoteNeedBytes < 0 || folder.RemoteNeedItems < 0 ||
+			folder.PeerCount < 0 ||
 			folder.SnapshotFiles < 0 || folder.SnapshotDirectories < 0 || folder.SnapshotBytes < 0 ||
 			folder.ConflictCount < 0 || folder.ConflictCount < len(folder.Conflicts) ||
 			len(folder.Conflicts) > 64 || len(folder.DeviceIDs) > 33 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
 			return errors.New("folder status is outside protocol bounds")
+		}
+		if folder.RemoteState != "" && !oneOf(folder.RemoteState, "local-only", "current", "syncing", "offline", "paused", "not-sharing", "unknown") {
+			return errors.New("folder remote completion state is outside protocol bounds")
+		}
+		if folder.RemotePeer != "" && !validDisplayText(folder.RemotePeer, 64) {
+			return errors.New("folder remote peer is outside protocol bounds")
 		}
 		for _, deviceID := range folder.DeviceIDs {
 			if !validIdentifier(deviceID) {

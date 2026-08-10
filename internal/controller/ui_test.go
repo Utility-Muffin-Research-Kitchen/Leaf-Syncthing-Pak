@@ -24,6 +24,22 @@ func TestApplyLiveStatusIncludesFolderOffers(t *testing.T) {
 	}
 }
 
+func TestApplyLiveStatusIncludesLocalAndRemoteNeed(t *testing.T) {
+	status := applyLiveStatus(uicontrol.Status{Folders: []uicontrol.FolderStatus{{
+		ID: "retro-saves", Issues: []uicontrol.Issue{},
+	}}}, syncthing.UIStatus{Folders: map[string]syncthing.UIFolderStatus{
+		"retro-saves": {
+			ID: "retro-saves", State: "syncing", NeedBytes: 10, NeedItems: 2,
+			RemoteState: "syncing", RemotePeer: "Laptop", RemoteBytes: 20, RemoteItems: 3,
+		},
+	}})
+	folder := status.Folders[0]
+	if folder.NeedBytes != 10 || folder.NeedItems != 2 || folder.RemoteState != "syncing" ||
+		folder.RemotePeer != "Laptop" || folder.RemoteNeedBytes != 20 || folder.RemoteNeedItems != 3 {
+		t.Fatalf("folder completion = %+v", folder)
+	}
+}
+
 func TestRecoverPendingDeviceRemoval(t *testing.T) {
 	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
 	if err != nil {

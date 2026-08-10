@@ -36,6 +36,7 @@ static void ls_show_folder_offers(ls_app *app);
 static void ls_show_devices(ls_app *app);
 static void ls_show_recovery(ls_app *app);
 static void ls_show_settings(ls_app *app);
+static void ls_guided_setup(ls_app *app);
 
 static void ls_message(const char *message) {
     cat_footer_item footer[] = {{.button = CAT_BTN_A, .label = "OK", .is_confirm = true}};
@@ -226,9 +227,7 @@ static void ls_show_folders(ls_app *app) {
         }
         for (index = 0; index < app->status.folder_count; index++) {
             ls_ui_folder *folder = &app->status.folders[index];
-            snprintf(values[index], sizeof(values[index]), "%s · %s%s%s", folder->state, folder->type,
-                     folder->first_sync_state[0] && strcmp(folder->first_sync_state, "complete") != 0
-                         ? " · setup required" : "",
+            snprintf(values[index], sizeof(values[index]), "%s · %s%s", ls_ui_folder_state_label(folder), folder->type,
                      folder->pending_rescan ? " · rescan pending" : "");
             items[item_count].label = folder->label;
             items[item_count].type = CAT_OPT_CLICKABLE;
@@ -413,13 +412,17 @@ static int ls_choose_labels(const char *title, const char *const *labels, int co
 }
 
 static const char *ls_folder_type_label(const char *folder_type) {
-    if (strcmp(folder_type, "sendonly") == 0) return "Send Only";
-    if (strcmp(folder_type, "receiveonly") == 0) return "Receive Only";
-    return "Send & Receive";
+    if (strcmp(folder_type, "sendonly") == 0) return "Keep Leaf files";
+    if (strcmp(folder_type, "receiveonly") == 0) return "Keep peer files";
+    return "Merge both";
 }
 
 static const char *ls_choose_folder_type(const char *title) {
-    static const char *const labels[] = {"Send & Receive (recommended)", "Send Only", "Receive Only"};
+    static const char *const labels[] = {
+        "Merge both devices (recommended)",
+        "Only send Leaf's files",
+        "Only receive the other device's files",
+    };
     static const char *const values[] = {"sendreceive", "sendonly", "receiveonly"};
     int selected = ls_choose_labels(title, labels, 3);
     return selected >= 0 ? values[selected] : NULL;
@@ -657,22 +660,16 @@ review:
     ls_first_sync_flow(app, plan.folder_id);
 }
 
-static void ls_add_folder(ls_app *app) {
-    static const char *const kind_labels[] = {"Leaf Saves (recommended)", "Leaf States (advanced)"};
-    static const char *const kind_values[] = {"saves", "states"};
+static void ls_add_folder_kind(ls_app *app, const char *kind) {
     char source_id[65];
     const char *folder_type;
-    const char *kind;
     const char *device_ids[LS_UI_MAX_PEERS];
     size_t device_count = 0;
-    int kind_index;
     int states_acknowledged = 0;
 
+    if (!kind || (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0)) return;
     ls_refresh(app);
     if (!app->controller_available || ls_choose_folder_card(app, source_id, sizeof(source_id)) != 0) return;
-    kind_index = ls_choose_labels("Choose Folder", kind_labels, 2);
-    if (kind_index < 0) return;
-    kind = kind_values[kind_index];
     if (strcmp(kind, "states") == 0) {
         states_acknowledged = ls_confirm(
             "Save states depend on the emulator, core, and version. They can be unsafe or non-portable across devices. Sync States anyway?",
@@ -684,6 +681,13 @@ static void ls_add_folder(ls_app *app) {
     if (!folder_type) return;
     ls_finish_folder_onboarding(app, source_id, kind, folder_type,
                                 device_ids, device_count, NULL, states_acknowledged);
+}
+
+static void ls_add_folder(ls_app *app) {
+    static const char *const kind_labels[] = {"Leaf Saves (recommended)", "Leaf States (advanced)"};
+    static const char *const kind_values[] = {"saves", "states"};
+    int kind_index = ls_choose_labels("Choose Folder", kind_labels, 2);
+    if (kind_index >= 0) ls_add_folder_kind(app, kind_values[kind_index]);
 }
 
 static void ls_join_folder_offer(ls_app *app, const ls_ui_folder_offer *offer) {
@@ -1930,14 +1934,185 @@ static void ls_show_gateway(ls_app *app) {
     }
 }
 
+static int ls_wait_for_controller(ls_app *app) {
+    int attempt;
+    for (attempt = 0; attempt < 75; attempt++) {
+        ls_refresh(app);
+        if (app->controller_available) return 1;
+        SDL_Delay(100);
+    }
+    ls_message(app->error[0] ? app->error : "Syncthing did not become ready. Setup can resume later.");
+    return 0;
+}
+
+static void ls_guided_setup(ls_app *app) {
+    int index;
+    int usable_cards = 0;
+    int configured_peers = 0;
+    int pending_offers = 0;
+    ls_ui_folder *saves = NULL;
+    ls_ui_status_summary summary = {0};
+
+    ls_refresh(app);
+    if (!app->service.found) {
+        ls_message("The Syncthing service is not installed in this Leaf runtime.");
+        return;
+    }
+    if (!app->service.desired_enabled || !ls_service_running(&app->service)) {
+        if (!ls_confirm(
+                "Start guided Syncthing setup? Leaf will start the service now and keep it enabled at startup. You can change this later.",
+                "Start setup")) return;
+        if (!app->service.desired_enabled &&
+            ls_ctl1_action(app->daemon_socket, "enable", LS_SERVICE_ID,
+                           app->error, sizeof(app->error)) != 0) {
+            ls_message(app->error);
+            return;
+        }
+        ls_refresh(app);
+        if (!ls_service_running(&app->service) &&
+            ls_ctl1_action(app->daemon_socket, "run", LS_SERVICE_ID,
+                           app->error, sizeof(app->error)) != 0) {
+            ls_message(app->error);
+            return;
+        }
+    }
+    if (!app->controller_available && !ls_wait_for_controller(app)) return;
+
+    for (index = 0; index < app->status.card_count; index++) {
+        ls_ui_card *card = &app->status.cards[index];
+        if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
+    }
+    if (usable_cards == 0) {
+        ls_message("Step 2 of 5: enroll the card whose Saves folder you want to sync. Setup resumes from this point if you leave.");
+        ls_show_cards(app);
+        ls_refresh(app);
+        for (index = 0; index < app->status.card_count; index++) {
+            ls_ui_card *card = &app->status.cards[index];
+            if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
+        }
+        if (usable_cards == 0) {
+            ls_message("No writable card is enrolled yet. Your setup progress is safe; return to Guided setup when the card is ready.");
+            return;
+        }
+    }
+
+    for (index = 0; index < app->status.peer_count; index++) {
+        if (!app->status.peers[index].pending) configured_peers++;
+    }
+    if (configured_peers == 0) {
+        ls_message("Step 3 of 5: connect another Syncthing device. Show Leaf's device ID or QR, add a peer by ID, or review a pending device in the next screen.");
+        ls_show_devices(app);
+        ls_refresh(app);
+        for (index = 0; index < app->status.peer_count; index++) {
+            if (!app->status.peers[index].pending) configured_peers++;
+        }
+        if (configured_peers == 0) {
+            ls_message("No peer is connected yet. Pairing can finish on either device; return to Guided setup afterward.");
+            return;
+        }
+    }
+
+    for (index = 0; index < app->status.folder_count; index++) {
+        if (strcmp(app->status.folders[index].kind, "saves") == 0) {
+            saves = &app->status.folders[index];
+            break;
+        }
+    }
+    if (!saves) {
+        static const char *const folder_choices[] = {"Create a Saves share", "Join an existing Saves share"};
+        for (index = 0; index < app->status.folder_offer_count; index++) {
+            if (!app->status.folder_offers[index].ignored) pending_offers++;
+        }
+        ls_message("Step 4 of 5: create a new Saves share on Leaf, or join one already offered by another device. Every participating device is selected explicitly.");
+        {
+            int choice = ls_choose_labels("Set Up Saves", folder_choices, 2);
+            if (choice < 0) return;
+            if (choice == 1 && pending_offers == 0) {
+                ls_message("No folder offer has arrived yet. Create and share the Saves folder on the other device, then return to Guided setup.");
+                return;
+            }
+            if (choice == 1) ls_show_folder_offers(app);
+            else ls_add_folder_kind(app, "saves");
+        }
+        ls_refresh(app);
+        for (index = 0; index < app->status.folder_count; index++) {
+            if (strcmp(app->status.folders[index].kind, "saves") == 0) {
+                saves = &app->status.folders[index];
+                break;
+            }
+        }
+        if (!saves) {
+            ls_message("A Saves folder has not been created yet. Setup will resume here.");
+            return;
+        }
+    }
+
+    if (!saves->first_sync_state[0] || strcmp(saves->first_sync_state, "complete") != 0) {
+        char folder_id[sizeof(saves->id)];
+        snprintf(folder_id, sizeof(folder_id), "%s", saves->id);
+        ls_message("Step 5 of 5: review first-sync safety and explicitly start the first sync. Receive-capable folders create the required same-card snapshot first.");
+        ls_first_sync_flow(app, folder_id);
+        ls_refresh(app);
+        saves = ls_find_folder(app, folder_id);
+        if (!saves || !saves->first_sync_state[0] || strcmp(saves->first_sync_state, "complete") != 0) {
+            ls_message("First-sync protection is still waiting for your review. Setup will resume here.");
+            return;
+        }
+    }
+
+    if (strcmp(ls_ui_folder_state_label(saves), "Syncing") == 0) {
+        char needed[32];
+        char message[512];
+        long long bytes = saves->need_bytes;
+        int items = saves->need_items;
+        if (LLONG_MAX - bytes < saves->remote_need_bytes) bytes = LLONG_MAX;
+        else bytes += saves->remote_need_bytes;
+        if (INT_MAX - items < saves->remote_need_items) items = INT_MAX;
+        else items += saves->remote_need_items;
+        ls_format_bytes(bytes, needed, sizeof(needed));
+        snprintf(message, sizeof(message),
+                 "Syncing Saves with %s. %d items / %s remain. Setup finishes only after every selected device reports current; return here to check again.",
+                 saves->remote_peer[0] ? saves->remote_peer : "the selected devices", items, needed);
+        ls_message(message);
+        return;
+    }
+    if (strcmp(ls_ui_folder_state_label(saves), "Needs attention") == 0) {
+        char folder_id[sizeof(saves->id)];
+        char message[512];
+        snprintf(folder_id, sizeof(folder_id), "%s", saves->id);
+        snprintf(message, sizeof(message), "Saves setup needs attention%s%s. Open its actions now?",
+                 saves->remote_peer[0] ? ": " : "",
+                 saves->remote_peer[0] ? saves->remote_peer : "");
+        if (ls_confirm(message, "Open folder")) ls_show_folder_actions(app, folder_id);
+        return;
+    }
+
+    ls_refresh(app);
+    (void)ls_ui_summarize_status(&app->status, &summary);
+    if (summary.state != LS_UI_UP_TO_DATE) {
+        char message[512];
+        snprintf(message, sizeof(message), "%s\n\nGuided setup will remain available until every configured folder is current.", summary.message);
+        ls_message(message);
+        return;
+    }
+    ls_message("Saves setup is complete and every selected device reports Up to date.");
+    for (index = 0; index < app->status.folder_count; index++) {
+        if (strcmp(app->status.folders[index].kind, "states") == 0) return;
+    }
+    if (ls_confirm(
+            "Set up States too? This is optional. Save states depend on the emulator, core, and version and may not work across devices.",
+            "Set up States"))
+        ls_add_folder_kind(app, "states");
+}
+
 static void ls_run_overview(ls_app *app) {
     int focus = 0;
     int scroll = 0;
     for (;;) {
         cat_option enabled_options[] = {{.label = "Off", .value = "Off"},
                                         {.label = "On", .value = "On"}};
-        cat_option value_options[8];
-        cat_options_item items[11];
+        cat_option value_options[9];
+        cat_options_item items[12];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Exit"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
@@ -1948,9 +2123,12 @@ static void ls_run_overview(ls_app *app) {
         char peer_value[32];
         char transfer_value[96];
         char issue_value[32];
+        char setup_value[32];
+        ls_ui_status_summary summary = {0};
         int item_count = 0;
         int action;
         int recovery_pending;
+        int saves_configured = 0;
         ls_refresh(app);
         recovery_pending = app->controller_available &&
                            strcmp(app->status.controller, "recovery-pending") == 0;
@@ -1969,7 +2147,17 @@ static void ls_run_overview(ls_app *app) {
         items[item_count++] = (cat_options_item){
             .label = ls_service_running(&app->service) ? "Stop" : "Run",
             .type = CAT_OPT_CLICKABLE};
+        snprintf(setup_value, sizeof(setup_value), "%s", "Start");
         if (app->controller_available) {
+            (void)ls_ui_summarize_status(&app->status, &summary);
+            for (int folder_index = 0; folder_index < app->status.folder_count; folder_index++) {
+                if (strcmp(app->status.folders[folder_index].kind, "saves") == 0) {
+                    saves_configured = 1;
+                    break;
+                }
+            }
+            snprintf(setup_value, sizeof(setup_value), "%s",
+                     saves_configured && summary.state == LS_UI_UP_TO_DATE ? "Complete" : "Continue");
             snprintf(card_value, sizeof(card_value), "%d", app->status.card_count);
             if (app->status.folder_offer_count > 0)
                 snprintf(folder_value, sizeof(folder_value), "%d · %d offers",
@@ -1979,10 +2167,15 @@ static void ls_run_overview(ls_app *app) {
             snprintf(peer_value, sizeof(peer_value), "%d", app->status.peer_count);
             snprintf(issue_value, sizeof(issue_value), "%d", app->status.issue_count);
             if (app->status.transfer_present) {
-                char needed[32];
-                ls_format_bytes(app->status.transfer_need_bytes, needed, sizeof(needed));
-                snprintf(transfer_value, sizeof(transfer_value), "%s · %s needed",
-                         app->status.transfer_state, needed);
+                if (summary.state == LS_UI_SYNCING) {
+                    char needed[32];
+                    ls_format_bytes(summary.need_bytes, needed, sizeof(needed));
+                    snprintf(transfer_value, sizeof(transfer_value), "Syncing · %d items · %s",
+                             summary.need_items, needed);
+                } else {
+                    snprintf(transfer_value, sizeof(transfer_value), "%s",
+                             ls_ui_top_state_label(summary.state));
+                }
             } else {
                 snprintf(transfer_value, sizeof(transfer_value), "%s", "Unavailable");
             }
@@ -1997,11 +2190,18 @@ static void ls_run_overview(ls_app *app) {
             value_options[7] = (cat_option){
                 .label = app->status.gateway_present && app->status.gateway_open ? "Open" : "Closed",
                 .value = app->status.gateway_present && app->status.gateway_open ? "Open" : "Closed"};
+            value_options[8] = (cat_option){.label = setup_value, .value = setup_value};
+        } else {
+            value_options[8] = (cat_option){.label = setup_value, .value = setup_value};
+        }
+        items[item_count++] = (cat_options_item){.label = "Guided setup", .type = CAT_OPT_CLICKABLE,
+            .options = &value_options[8], .option_count = 1};
+        if (app->controller_available) {
             if (recovery_pending) {
                 items[item_count++] = (cat_options_item){.label = "Recovery issue", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[6], .option_count = 1};
             } else {
-                items[item_count++] = (cat_options_item){.label = "Transfer", .type = CAT_OPT_CLICKABLE,
+                items[item_count++] = (cat_options_item){.label = "Status", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[4], .option_count = 1};
                 items[item_count++] = (cat_options_item){.label = "Cards", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[1], .option_count = 1};
@@ -2052,32 +2252,34 @@ static void ls_run_overview(ls_app *app) {
             const char *operation = ls_service_running(&app->service) ? "stop" : "run";
             if (ls_ctl1_action(app->daemon_socket, operation, LS_SERVICE_ID,
                                app->error, sizeof(app->error)) != 0) ls_message(app->error);
-        } else if (recovery_pending && focus == 3) {
+        } else if (focus == 3) {
+            ls_guided_setup(app);
+        } else if (recovery_pending && focus == 4) {
             ls_show_issues(app);
-        } else if (app->controller_available && focus == 3) {
-            char local[32], global[32], needed[32], received[32], sent[32], detail[512];
+        } else if (app->controller_available && focus == 4) {
+            char local[32], global[32], needed[32], received[32], sent[32], detail[768];
             ls_format_bytes(app->status.transfer_local_bytes, local, sizeof(local));
             ls_format_bytes(app->status.transfer_global_bytes, global, sizeof(global));
             ls_format_bytes(app->status.transfer_need_bytes, needed, sizeof(needed));
             ls_format_bytes(app->status.transfer_in_bytes, received, sizeof(received));
             ls_format_bytes(app->status.transfer_out_bytes, sent, sizeof(sent));
-            snprintf(detail, sizeof(detail), "State: %s\nLocal: %s\nGlobal: %s\nNeeded: %s\nSession received: %s\nSession sent: %s",
-                     app->status.transfer_present ? app->status.transfer_state : "Unavailable",
+            snprintf(detail, sizeof(detail), "%s\n%s\n\nLocal: %s\nGlobal: %s\nLocal needed: %s\nSession received: %s\nSession sent: %s",
+                     ls_ui_top_state_label(summary.state), summary.message,
                      local, global, needed, received, sent);
             ls_message(detail);
-        } else if (app->controller_available && focus == 4) {
-            ls_show_cards(app);
         } else if (app->controller_available && focus == 5) {
-            ls_show_folders(app);
+            ls_show_cards(app);
         } else if (app->controller_available && focus == 6) {
-            ls_show_devices(app);
+            ls_show_folders(app);
         } else if (app->controller_available && focus == 7) {
-            ls_change_network(app);
+            ls_show_devices(app);
         } else if (app->controller_available && focus == 8) {
-            ls_show_gateway(app);
+            ls_change_network(app);
         } else if (app->controller_available && focus == 9) {
-            ls_show_settings(app);
+            ls_show_gateway(app);
         } else if (app->controller_available && focus == 10) {
+            ls_show_settings(app);
+        } else if (app->controller_available && focus == 11) {
             ls_show_issues(app);
         }
         if (app->exit_requested) return;

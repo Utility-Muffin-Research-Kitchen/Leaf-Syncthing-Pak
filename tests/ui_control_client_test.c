@@ -65,6 +65,8 @@ int main(void) {
             "\"card_id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"saves\",\"path\":\"/mnt/sdcard/Saves\","
             "\"type\":\"sendreceive\",\"state\":\"idle\",\"paused\":false,\"pause_reasons\":[],"
             "\"pending_rescan\":false,\"local_bytes\":10,\"global_bytes\":10,\"local_items\":3,\"global_items\":4,\"peer_count\":1,"
+            "\"need_bytes\":5,\"need_items\":1,\"remote_state\":\"syncing\",\"remote_peer\":\"Laptop\","
+            "\"remote_need_bytes\":7,\"remote_need_items\":2,"
             "\"device_ids\":[\"LOCAL\",\"PEER\"],"
             "\"last_sync\":\"2026-08-08T12:00:00Z\",\"versioning\":\"simple\",\"conflict_count\":1,"
             "\"first_sync_state\":\"ready\",\"snapshot_name\":\"first-sync-20260808T120000Z\","
@@ -136,10 +138,44 @@ int main(void) {
     assert(status.onboarding.file_count == 3 && status.onboarding.available_bytes == 8192);
     assert(status.folder_count == 1 && status.folders[0].local_items == 3 &&
            status.folders[0].global_items == 4);
+    assert(status.folders[0].need_bytes == 5 && status.folders[0].need_items == 1);
+    assert(strcmp(status.folders[0].remote_state, "syncing") == 0 &&
+           strcmp(status.folders[0].remote_peer, "Laptop") == 0 &&
+           status.folders[0].remote_need_bytes == 7 && status.folders[0].remote_need_items == 2);
     assert(status.folders[0].device_count == 2 &&
            strcmp(status.folders[0].device_ids[1], "PEER") == 0);
     assert(strcmp(status.folders[0].first_sync_state, "ready") == 0 &&
            status.folders[0].snapshot_files == 3 && status.folders[0].snapshot_bytes == 4096);
+    assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Needs attention") == 0);
+    {
+        ls_ui_status_summary summary;
+        assert(ls_ui_summarize_status(&status, &summary) == 0);
+        assert(summary.state == LS_UI_NEEDS_ATTENTION);
+        assert(strcmp(ls_ui_top_state_label(summary.state), "Needs attention") == 0);
+
+        status.issue_count = 0;
+        status.folder_offer_count = 0;
+        status.folders[0].conflict_count = 0;
+        snprintf(status.folders[0].first_sync_state, sizeof(status.folders[0].first_sync_state), "complete");
+        status.folders[0].need_bytes = 0;
+        status.folders[0].need_items = 0;
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "syncing");
+        status.folders[0].remote_need_bytes = 7;
+        status.folders[0].remote_need_items = 2;
+        assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Syncing") == 0);
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_SYNCING &&
+               summary.need_bytes == 7 && summary.need_items == 2);
+
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "current");
+        status.folders[0].remote_need_bytes = 0;
+        status.folders[0].remote_need_items = 0;
+        assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Up to date") == 0);
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_UP_TO_DATE);
+
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "offline");
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_NEEDS_ATTENTION &&
+               strstr(summary.message, "Laptop") != NULL);
+    }
     puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");
     return 0;
 }

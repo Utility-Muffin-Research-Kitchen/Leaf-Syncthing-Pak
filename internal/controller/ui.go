@@ -60,6 +60,12 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 		status.Folders[index].GlobalBytes = upstream.GlobalBytes
 		status.Folders[index].LocalItems = upstream.LocalItems
 		status.Folders[index].GlobalItems = upstream.GlobalItems
+		status.Folders[index].NeedBytes = upstream.NeedBytes
+		status.Folders[index].NeedItems = upstream.NeedItems
+		status.Folders[index].RemoteState = upstream.RemoteState
+		status.Folders[index].RemotePeer = upstream.RemotePeer
+		status.Folders[index].RemoteNeedBytes = upstream.RemoteBytes
+		status.Folders[index].RemoteNeedItems = upstream.RemoteItems
 		status.Folders[index].LastSync = upstream.LastActivity
 		if len(status.Folders[index].Issues) == 0 {
 			if status.Folders[index].Paused {

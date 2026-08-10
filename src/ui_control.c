@@ -393,7 +393,9 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
             ls_copy_json(folder->versioning, sizeof(folder->versioning), cJSON_GetObjectItemCaseSensitive(item, "versioning")) != 0 ||
             ls_copy_optional_json(folder->first_sync_state, sizeof(folder->first_sync_state), cJSON_GetObjectItemCaseSensitive(item, "first_sync_state")) != 0 ||
             ls_copy_optional_json(folder->snapshot_name, sizeof(folder->snapshot_name), cJSON_GetObjectItemCaseSensitive(item, "snapshot_name")) != 0 ||
-            ls_copy_optional_json(folder->first_sync_message, sizeof(folder->first_sync_message), cJSON_GetObjectItemCaseSensitive(item, "first_sync_message")) != 0) return -1;
+            ls_copy_optional_json(folder->first_sync_message, sizeof(folder->first_sync_message), cJSON_GetObjectItemCaseSensitive(item, "first_sync_message")) != 0 ||
+            ls_copy_optional_json(folder->remote_state, sizeof(folder->remote_state), cJSON_GetObjectItemCaseSensitive(item, "remote_state")) != 0 ||
+            ls_copy_optional_json(folder->remote_peer, sizeof(folder->remote_peer), cJSON_GetObjectItemCaseSensitive(item, "remote_peer")) != 0) return -1;
         value = cJSON_GetObjectItemCaseSensitive(item, "paused");
         if (!cJSON_IsBool(value)) return -1;
         folder->paused = cJSON_IsTrue(value);
@@ -415,6 +417,10 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         folder->global_bytes = (long long)value->valuedouble;
         if (ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "local_items"), &folder->local_items) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "global_items"), &folder->global_items) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "need_bytes"), &folder->need_bytes) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "need_items"), &folder->need_items) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "remote_need_bytes"), &folder->remote_need_bytes) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "remote_need_items"), &folder->remote_need_items) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_files"), &folder->snapshot_files) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_directories"), &folder->snapshot_directories) != 0 ||
             ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "snapshot_bytes"), &folder->snapshot_bytes) != 0) return -1;
@@ -844,4 +850,99 @@ bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {
         if (strcmp(status->capabilities[index], operation) == 0) return true;
     }
     return false;
+}
+
+const char *ls_ui_top_state_label(ls_ui_top_state state) {
+    if (state == LS_UI_UP_TO_DATE) return "Up to date";
+    if (state == LS_UI_SYNCING) return "Syncing";
+    return "Needs attention";
+}
+
+const char *ls_ui_folder_state_label(const ls_ui_folder *folder) {
+    if (!folder || folder->conflict_count > 0 || folder->paused || folder->peer_count <= 0 ||
+        !folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0 ||
+        !folder->remote_state[0] || strcmp(folder->remote_state, "offline") == 0 ||
+        strcmp(folder->remote_state, "paused") == 0 ||
+        strcmp(folder->remote_state, "not-sharing") == 0 ||
+        strcmp(folder->remote_state, "unknown") == 0 ||
+        strcmp(folder->remote_state, "local-only") == 0 || strcmp(folder->state, "error") == 0)
+        return "Needs attention";
+    if (folder->need_bytes > 0 || folder->need_items > 0 || folder->remote_need_bytes > 0 ||
+        folder->remote_need_items > 0 || strcmp(folder->remote_state, "syncing") == 0 ||
+        strcmp(folder->state, "syncing") == 0 || strcmp(folder->state, "scanning") == 0 ||
+        strcmp(folder->state, "sync-preparing") == 0)
+        return "Syncing";
+    return "Up to date";
+}
+
+int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *summary) {
+    int index;
+    const ls_ui_folder *sync_folder = NULL;
+    if (!status || !summary) return -1;
+    memset(summary, 0, sizeof(*summary));
+    summary->state = LS_UI_NEEDS_ATTENTION;
+    if (strcmp(status->controller, "running") != 0 || strcmp(status->upstream_state, "running") != 0) {
+        snprintf(summary->message, sizeof(summary->message), "The Syncthing service is not ready.");
+        return 0;
+    }
+    if (status->issue_count > 0) {
+        snprintf(summary->message, sizeof(summary->message), "%s", status->issues[0].message);
+        return 0;
+    }
+    for (index = 0; index < status->folder_offer_count; index++) {
+        if (!status->folder_offers[index].ignored) {
+            snprintf(summary->message, sizeof(summary->message), "Review the folder offer from %s.",
+                     status->folder_offers[index].device_name);
+            return 0;
+        }
+    }
+    if (status->folder_count == 0) {
+        snprintf(summary->message, sizeof(summary->message), "Finish setting up a Saves folder.");
+        return 0;
+    }
+    for (index = 0; index < status->folder_count; index++) {
+        const ls_ui_folder *folder = &status->folders[index];
+        const char *state = ls_ui_folder_state_label(folder);
+        if (strcmp(state, "Needs attention") == 0) {
+            if (folder->conflict_count > 0)
+                snprintf(summary->message, sizeof(summary->message), "Resolve conflicts in %s.", folder->label);
+            else if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0)
+                snprintf(summary->message, sizeof(summary->message), "Finish first sync for %s.", folder->label);
+            else if (folder->paused)
+                snprintf(summary->message, sizeof(summary->message), "Resume %s when it is safe to sync.", folder->label);
+            else if (folder->peer_count <= 0)
+                snprintf(summary->message, sizeof(summary->message), "Share %s with at least one device.", folder->label);
+            else if (folder->remote_peer[0])
+                snprintf(summary->message, sizeof(summary->message), "%s needs attention for %s (%s).",
+                         folder->remote_peer, folder->label,
+                         folder->remote_state[0] ? folder->remote_state : "completion unknown");
+            else
+                snprintf(summary->message, sizeof(summary->message), "Check %s before syncing.", folder->label);
+            return 0;
+        }
+        if (strcmp(state, "Syncing") == 0) {
+            long long bytes = folder->need_bytes;
+            int items = folder->need_items;
+            if (LLONG_MAX - bytes < folder->remote_need_bytes) bytes = LLONG_MAX;
+            else bytes += folder->remote_need_bytes;
+            if (INT_MAX - items < folder->remote_need_items) items = INT_MAX;
+            else items += folder->remote_need_items;
+            if (LLONG_MAX - summary->need_bytes < bytes) summary->need_bytes = LLONG_MAX;
+            else summary->need_bytes += bytes;
+            if (INT_MAX - summary->need_items < items) summary->need_items = INT_MAX;
+            else summary->need_items += items;
+            if (!sync_folder) sync_folder = folder;
+        }
+    }
+    if (sync_folder) {
+        summary->state = LS_UI_SYNCING;
+        snprintf(summary->message, sizeof(summary->message), "Syncing %s%s%s.", sync_folder->label,
+                 sync_folder->remote_peer[0] ? " with " : "",
+                 sync_folder->remote_peer[0] ? sync_folder->remote_peer : "");
+        return 0;
+    }
+    summary->state = LS_UI_UP_TO_DATE;
+    snprintf(summary->message, sizeof(summary->message),
+             "Every managed folder and selected device is current.");
+    return 0;
 }

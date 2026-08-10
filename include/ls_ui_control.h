@@ -51,6 +51,12 @@ typedef struct {
     long long global_bytes;
     int local_items;
     int global_items;
+    long long need_bytes;
+    int need_items;
+    char remote_state[32];
+    char remote_peer[65];
+    long long remote_need_bytes;
+    int remote_need_items;
     int peer_count;
     char device_ids[LS_UI_MAX_FOLDER_DEVICES][128];
     int device_count;
@@ -186,6 +192,19 @@ typedef struct {
     int capability_count;
 } ls_ui_status;
 
+typedef enum {
+    LS_UI_NEEDS_ATTENTION = 0,
+    LS_UI_SYNCING = 1,
+    LS_UI_UP_TO_DATE = 2,
+} ls_ui_top_state;
+
+typedef struct {
+    ls_ui_top_state state;
+    long long need_bytes;
+    int need_items;
+    char message[256];
+} ls_ui_status_summary;
+
 int ls_ui_status_get(const char *socket_path,
                      ls_ui_status *status,
                      char *error,
@@ -302,5 +321,8 @@ int ls_ui_parse_response(const char *payload,
                          char *error,
                          size_t error_size);
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation);
+const char *ls_ui_top_state_label(ls_ui_top_state state);
+const char *ls_ui_folder_state_label(const ls_ui_folder *folder);
+int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *summary);
 
 #endif

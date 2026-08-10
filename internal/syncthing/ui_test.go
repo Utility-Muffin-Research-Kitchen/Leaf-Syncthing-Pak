@@ -23,18 +23,59 @@ func TestReadUIStatusReturnsBoundedFoldersPeersAndTransfer(t *testing.T) {
 		"GET /rest/cluster/pending/folders":                      `{"retro-saves":{"offeredBy":{"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH":{"time":"2026-08-09T12:34:56.123Z","label":"Retro Saves","receiveEncrypted":false,"remoteEncrypted":false}}}}`,
 		"GET /rest/stats/folder":                                 `{"leaf-saves-0011223344556677":{"lastFile":{"at":"2026-08-08T10:00:00Z"}}}`,
 		"GET /rest/db/status?folder=leaf-saves-0011223344556677": `{"state":"syncing","localBytes":100,"globalBytes":140,"needBytes":40,"errors":0,"pullErrors":0}`,
+		"GET /rest/db/completion?device=AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH&folder=leaf-saves-0011223344556677": `{"needBytes":20,"needItems":2,"needDeletes":1,"remoteState":"valid"}`,
 	})
 	process := &Process{client: &http.Client{Transport: transport}, apiKey: "secret"}
-	status, err := process.ReadUIStatus(context.Background(), []ConfiguredFolder{{ID: "leaf-saves-0011223344556677"}}, "SELF")
+	status, err := process.ReadUIStatus(context.Background(), []ConfiguredFolder{{
+		ID:      "leaf-saves-0011223344556677",
+		Devices: []string{"SELF", "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"},
+	}}, "SELF")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.Transfer.State != "syncing" || status.Transfer.NeedBytes != 40 || len(status.Peers) != 2 ||
 		status.Peers[0].State != "pending" || status.Peers[1].Connection != "local" ||
 		status.Folders["leaf-saves-0011223344556677"].LastActivity != "2026-08-08T10:00:00Z" ||
+		status.Folders["leaf-saves-0011223344556677"].RemoteState != "syncing" ||
+		status.Folders["leaf-saves-0011223344556677"].RemotePeer != "Laptop" ||
+		status.Folders["leaf-saves-0011223344556677"].RemoteBytes != 20 ||
+		status.Folders["leaf-saves-0011223344556677"].RemoteItems != 3 ||
 		len(status.FolderOffers) != 1 || status.FolderOffers[0].FolderID != "retro-saves" ||
 		status.FolderOffers[0].DeviceName != "Laptop" || status.FolderOffers[0].OfferedAt != "2026-08-09T12:34:56Z" {
 		t.Fatalf("UI status = %+v", status)
+	}
+}
+
+func TestReadUIStatusNeverCallsCompletionForOfflinePeer(t *testing.T) {
+	peer := "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+	transport := roundTripMap(t, map[string]string{
+		"GET /rest/config/devices":               `[{"deviceID":"SELF","name":"Leaf"},{"deviceID":"` + peer + `","name":"Laptop"}]`,
+		"GET /rest/system/connections":           `{"connections":{}}`,
+		"GET /rest/cluster/pending/devices":      `{}`,
+		"GET /rest/cluster/pending/folders":      `{}`,
+		"GET /rest/stats/folder":                 `{}`,
+		"GET /rest/db/status?folder=retro-saves": `{"state":"idle","localBytes":4,"globalBytes":4,"needBytes":0,"needTotalItems":0,"errors":0,"pullErrors":0}`,
+	})
+	process := &Process{client: &http.Client{Transport: transport}, apiKey: "secret"}
+	status, err := process.ReadUIStatus(context.Background(), []ConfiguredFolder{{
+		ID: "retro-saves", Devices: []string{"SELF", peer},
+	}}, "SELF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder := status.Folders["retro-saves"]
+	if folder.RemoteState != "offline" || folder.RemotePeer != "Laptop" || folder.RemoteBytes != 0 || folder.RemoteItems != 0 {
+		t.Fatalf("offline completion = %+v", folder)
+	}
+}
+
+func TestBoundedRemoteCompletionValues(t *testing.T) {
+	if boundedRemoteState("notSharing") != "not-sharing" || boundedRemoteState("future") != "unknown" {
+		t.Fatal("remote state was not bounded")
+	}
+	maximum := int64(^uint64(0) >> 1)
+	if got := boundedByteTotal(maximum-1, 2); got != maximum {
+		t.Fatalf("bounded bytes = %d", got)
 	}
 }
 

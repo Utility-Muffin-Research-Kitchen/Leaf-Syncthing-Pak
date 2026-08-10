@@ -88,7 +88,12 @@ Card rows freeze physical identity, current slot/root, state (`absent`,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
 identity, card/kind/path/type, pause state and reasons, sizes, peer count, exact
 `device_ids` membership, last sync, versioning, an optional bounded conflict
-list, and scoped issues. Peer rows
+list, and scoped issues. They also include local needed items/bytes and a
+bounded remote summary (`current`, `syncing`, `offline`, `paused`,
+`not-sharing`, `unknown`, or `local-only`) with the first involved peer and
+aggregate needed items/bytes. Connected selected peers are checked with
+Syncthing's standard per-device/per-folder completion endpoint; an offline peer
+is reported honestly without making that expensive call. Peer rows
 distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
 explicit and are never accepted by a status read. Folder-offer rows include
 the network folder ID and label, offering device ID/name, offer time,
@@ -120,6 +125,29 @@ matching `card-id`. A replacement card at the remembered mountpoint therefore
 appears as a separate unenrolled row, and duplicate live IDs fail closed.
 
 Generic Run, Stop, and Start-with-Leaf operations remain CTL-1.
+
+## Guided setup and top-level status
+
+The foreground Guided setup entry is a resumable view over existing CTL-1 and
+UI-control operations; it adds no second configuration owner or wizard state.
+Each invocation derives the first incomplete step from durable service, card,
+peer, folder-binding, first-sync, and live completion state. It enables and
+starts Syncthing, enrolls a card, connects a peer, explicitly chooses Create or
+Join for Saves, presents the exact peer checklist, asks for the initial
+direction in plain language, and reuses the B3 snapshot/first-sync flow.
+
+The journey does not finish at configuration acceptance. Its selected Saves
+folder must have completed first-sync protection, have zero local need, and
+report zero need for every connected selected peer. The same evidence drives
+the overview and folder-list labels:
+
+- `Up to date` only when every managed folder and selected peer is current;
+- `Syncing` with remaining items/bytes and the first involved peer; or
+- `Needs attention` with the first actionable offer, conflict, pause, folder,
+  card, peer, or controller reason.
+
+States is offered separately only after Saves reaches `Up to date`, with the
+emulator/core/version compatibility warning.
 
 ## `network.profile.set`
 
