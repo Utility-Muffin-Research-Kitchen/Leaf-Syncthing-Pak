@@ -76,7 +76,7 @@ int main(void) {
             "\"address\":\"tcp://192.0.2.2:22000\",\"paused\":false,\"introducer\":false,\"pending\":false}],"
         "\"folder_offers\":[{\"folder_id\":\"retro-saves\",\"label\":\"Retro Saves\","
             "\"device_id\":\"PEER\",\"device_id_suffix\":\"PEER\",\"device_name\":\"Laptop\","
-            "\"offered_at\":\"2026-08-09T12:34:56Z\",\"receive_encrypted\":false,\"remote_encrypted\":false}],"
+            "\"offered_at\":\"2026-08-09T12:34:56Z\",\"receive_encrypted\":false,\"remote_encrypted\":false,\"ignored\":true}],"
         "\"issues\":[],\"capabilities\":[\"log.level.set\",\"diagnostics.export\"]}}";
     char *payload = read_fixture("status-get-response.json", &size);
     assert(ls_ui_parse_response(payload, size, "fixture-status", &status,
@@ -129,7 +129,7 @@ int main(void) {
                   "/mnt/sdcard/Logs/leaf-syncthing-diagnostics.json") == 0);
     assert(status.peer_count == 1 && strcmp(status.peers[0].connection, "direct") == 0);
     assert(status.folder_offer_count == 1 &&
-           strcmp(status.folder_offers[0].device_name, "Laptop") == 0);
+           strcmp(status.folder_offers[0].device_name, "Laptop") == 0 && status.folder_offers[0].ignored);
     assert(status.onboarding_present && status.onboarding.snapshot_possible);
     assert(status.onboarding.join_existing && strcmp(status.onboarding.offer_device_id, "PEER") == 0);
     assert(status.card_count == 1 && strcmp(status.cards[0].source_id, "primary") == 0);

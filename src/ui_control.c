@@ -371,6 +371,9 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
             value = cJSON_GetObjectItemCaseSensitive(item, "remote_encrypted");
             if (!cJSON_IsBool(value)) return -1;
             offer->remote_encrypted = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "ignored");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->ignored = cJSON_IsTrue(value);
         }
     }
 
@@ -664,6 +667,22 @@ int ls_ui_folder_offer_plan(const char *socket_path, const char *folder_id,
 invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create folder offer review request");
+    return -1;
+}
+
+int ls_ui_folder_offer_action(const char *socket_path, const char *folder_id,
+                              const char *device_id, bool ignored,
+                              ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id || !device_id ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, ignored ? "folder.offer.ignore" : "folder.offer.restore",
+                          arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder offer action");
     return -1;
 }
 

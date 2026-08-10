@@ -196,6 +196,8 @@ static void ls_show_folders(ls_app *app) {
         int item_count = 0;
         int add_available;
         int offers_available;
+        int ignored_offers = 0;
+        int pending_offers;
         int action;
         ls_refresh(app);
         if (!app->controller_available) {
@@ -204,14 +206,20 @@ static void ls_show_folders(ls_app *app) {
         }
         add_available = ls_ui_has_capability(&app->status, "folder.onboard.plan");
         offers_available = app->status.folder_offer_count > 0 &&
-                           ls_ui_has_capability(&app->status, "folder.offer.plan");
+                           ls_ui_has_capability(&app->status, "folder.offer.plan") &&
+                           ls_ui_has_capability(&app->status, "folder.offer.ignore") &&
+                           ls_ui_has_capability(&app->status, "folder.offer.restore");
+        for (index = 0; index < app->status.folder_offer_count; index++) {
+            if (app->status.folder_offers[index].ignored) ignored_offers++;
+        }
+        pending_offers = app->status.folder_offer_count - ignored_offers;
         memset(items, 0, sizeof(items));
         memset(item_options, 0, sizeof(item_options));
         if (add_available) {
             items[item_count++] = (cat_options_item){.label = "Add managed folder", .type = CAT_OPT_CLICKABLE};
         }
         if (offers_available) {
-            snprintf(offer_value, sizeof(offer_value), "%d pending", app->status.folder_offer_count);
+            snprintf(offer_value, sizeof(offer_value), "%d pending · %d ignored", pending_offers, ignored_offers);
             offer_option = (cat_option){.label = offer_value, .value = offer_value};
             items[item_count++] = (cat_options_item){.label = "Join offered folder", .type = CAT_OPT_CLICKABLE,
                                                      .options = &offer_option, .option_count = 1};
@@ -721,7 +729,8 @@ static void ls_show_folder_offers(ls_app *app) {
         cat_option values[LS_UI_MAX_FOLDER_OFFERS];
         char value_text[LS_UI_MAX_FOLDER_OFFERS][128];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
-                                    {.button = CAT_BTN_A, .label = "Review", .is_confirm = true}};
+                                    {.button = CAT_BTN_A, .label = "Review/Restore", .is_confirm = true},
+                                    {.button = CAT_BTN_Y, .label = "Ignore"}};
         cat_options_list_opts options = {0};
         cat_options_list_result result = {0};
         int index;
@@ -740,7 +749,8 @@ static void ls_show_folder_offers(ls_app *app) {
         for (index = 0; index < app->status.folder_offer_count; index++) {
             ls_ui_folder_offer *offer = &app->status.folder_offers[index];
             snprintf(value_text[index], sizeof(value_text[index]), "%s%s · ...%s",
-                     offer->receive_encrypted || offer->remote_encrypted ? "Unsupported encryption · " : "",
+                     offer->ignored ? "Ignored · " :
+                     (offer->receive_encrypted || offer->remote_encrypted ? "Unsupported encryption · " : ""),
                      offer->device_name, offer->device_id_suffix);
             values[index] = (cat_option){.label = value_text[index], .value = value_text[index]};
             items[index] = (cat_options_item){.label = offer->label, .type = CAT_OPT_CLICKABLE,
@@ -750,16 +760,34 @@ static void ls_show_folder_offers(ls_app *app) {
         options.items = items;
         options.item_count = app->status.folder_offer_count;
         options.footer = footer;
-        options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+        options.footer_count = cat_hints_enabled_from_env() ? 3 : 0;
+        options.secondary_action_button = CAT_BTN_Y;
         options.initial_selected_index = focus < app->status.folder_offer_count ? focus : 0;
         options.visible_start_index = scroll;
         action = cat_options_list(&options, &result);
         focus = result.focused_index;
         scroll = result.visible_start_index;
         if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
-        if (result.action == CAT_ACTION_SELECTED && focus >= 0 && focus < app->status.folder_offer_count) {
+        if (focus >= 0 && focus < app->status.folder_offer_count &&
+            result.action == CAT_ACTION_SECONDARY_TRIGGERED) {
             ls_ui_folder_offer offer = app->status.folder_offers[focus];
-            ls_join_folder_offer(app, &offer);
+            if (!offer.ignored &&
+                ls_confirm("Hide this folder offer? You can restore it later from this list.", "Ignore") &&
+                ls_ui_folder_offer_action(app->control_socket, offer.folder_id, offer.device_id, true,
+                                          &app->status, app->error, sizeof(app->error)) != 0) {
+                ls_message(app->error);
+            }
+        } else if (result.action == CAT_ACTION_SELECTED && focus >= 0 && focus < app->status.folder_offer_count) {
+            ls_ui_folder_offer offer = app->status.folder_offers[focus];
+            if (offer.ignored) {
+                if (ls_confirm("Show this ignored folder offer as pending again?", "Restore") &&
+                    ls_ui_folder_offer_action(app->control_socket, offer.folder_id, offer.device_id, false,
+                                              &app->status, app->error, sizeof(app->error)) != 0) {
+                    ls_message(app->error);
+                }
+            } else {
+                ls_join_folder_offer(app, &offer);
+            }
         }
     }
 }

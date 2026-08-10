@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 17 {
-		t.Fatalf("checked %d fixtures, want 17", checked)
+	if checked != 19 {
+		t.Fatalf("checked %d fixtures, want 19", checked)
 	}
 }
 
@@ -379,6 +379,27 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 			t.Fatalf("unsafe B3 action accepted: %s = %+v", request, response)
 		}
+	}
+}
+
+func TestFolderOfferActionsRequireConfirmation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		FolderOfferAction: func(operation, folderID, deviceID string) (Status, *ProtocolError) {
+			called = operation + ":" + folderID + ":" + deviceID
+			return fixtureStatus(), nil
+		},
+	}
+	for _, operation := range []string{OperationFolderOfferIgnore, OperationFolderOfferRestore} {
+		response := operations.Handle([]byte(`{"v":1,"id":"offer","op":"` + operation + `","args":{"folder_id":"retro-saves","device_id":"peer","confirmed":true}}`))
+		if !response.OK || called != operation+":retro-saves:peer" {
+			t.Fatalf("%s = %+v, called=%q", operation, response, called)
+		}
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"offer","op":"folder.offer.ignore","args":{"folder_id":"retro-saves","device_id":"peer","confirmed":false}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("unconfirmed ignore = %+v", response)
 	}
 }
 

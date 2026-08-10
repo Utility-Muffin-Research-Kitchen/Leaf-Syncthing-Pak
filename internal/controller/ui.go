@@ -70,6 +70,15 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 	return status
 }
 
+func applyIgnoredFolderOffers(status uicontrol.Status, ignored map[string]bool) uicontrol.Status {
+	for index := range status.FolderOffers {
+		status.FolderOffers[index].Ignored = ignored[folderOfferKey(
+			status.FolderOffers[index].FolderID, status.FolderOffers[index].DeviceID,
+		)]
+	}
+	return status
+}
+
 func applyLiveStatusError(status uicontrol.Status) uicontrol.Status {
 	issue := uicontrol.Issue{
 		Code: "upstream-status-unavailable", Message: "Live Syncthing status is temporarily unavailable",

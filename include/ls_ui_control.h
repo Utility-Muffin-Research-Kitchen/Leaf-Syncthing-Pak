@@ -88,6 +88,7 @@ typedef struct {
     char offered_at[65];
     bool receive_encrypted;
     bool remote_encrypted;
+    bool ignored;
 } ls_ui_folder_offer;
 
 typedef struct {
@@ -230,6 +231,13 @@ int ls_ui_folder_offer_plan(const char *socket_path,
                             ls_ui_status *status,
                             char *error,
                             size_t error_size);
+int ls_ui_folder_offer_action(const char *socket_path,
+                              const char *folder_id,
+                              const char *device_id,
+                              bool ignored,
+                              ls_ui_status *status,
+                              char *error,
+                              size_t error_size);
 int ls_ui_folder_onboard_create(const char *socket_path,
                                 const char *plan_id,
                                 bool states_warning_acknowledged,

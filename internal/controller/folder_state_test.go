@@ -148,3 +148,28 @@ func TestFolderControlStateAllowsSavesAndStatesOnOneCard(t *testing.T) {
 		t.Fatal("second Saves binding for the same card was accepted")
 	}
 }
+
+func TestFolderControlStatePersistsIgnoredOffers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), folderControlStateName)
+	store, err := newFolderControlStore(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetOfferIgnored("retro-saves", onboardingPeer, true); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := newFolderControlStore(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := folderOfferKey("retro-saves", onboardingPeer)
+	if !reloaded.IgnoredOffers()[key] {
+		t.Fatalf("ignored offers = %#v", reloaded.IgnoredOffers())
+	}
+	if err := reloaded.SetOfferIgnored("retro-saves", onboardingPeer, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.IgnoredOffers()) != 0 {
+		t.Fatalf("restored offers = %#v", reloaded.IgnoredOffers())
+	}
+}

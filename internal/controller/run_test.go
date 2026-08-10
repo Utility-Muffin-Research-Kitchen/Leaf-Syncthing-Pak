@@ -418,7 +418,7 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		localOnly.Result.Folders[0].Paused {
 		t.Fatalf("folder final unshare = %+v", localOnly)
 	}
-	records, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
+	records, _, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,6 +512,22 @@ func TestRunPlansAndAcceptsStandardFolderOffer(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- runner.Run(ctx) }()
 	waitForControlSocket(t, config.ControlSocket)
+
+	ignored := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"offer-ignore","op":"folder.offer.ignore","args":{"folder_id":"retro-saves","device_id":"`+onboardingPeer+`","confirmed":true}}`)
+	if !ignored.OK || ignored.Result == nil || len(ignored.Result.FolderOffers) != 1 || !ignored.Result.FolderOffers[0].Ignored {
+		t.Fatalf("ignored offer = %+v", ignored)
+	}
+	blocked := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"offer-plan-blocked","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"`+onboardingPeer+`","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`)
+	if blocked.OK || blocked.Error == nil || blocked.Error.Message != "Restore this ignored folder offer before reviewing it" {
+		t.Fatalf("ignored offer plan = %+v", blocked)
+	}
+	restored := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"offer-restore","op":"folder.offer.restore","args":{"folder_id":"retro-saves","device_id":"`+onboardingPeer+`","confirmed":true}}`)
+	if !restored.OK || restored.Result == nil || len(restored.Result.FolderOffers) != 1 || restored.Result.FolderOffers[0].Ignored {
+		t.Fatalf("restored offer = %+v", restored)
+	}
 
 	plan := sendUIControlRequest(t, config.ControlSocket,
 		`{"v":1,"id":"offer-plan","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"`+onboardingPeer+`","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`)

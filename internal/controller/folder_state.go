@@ -31,21 +31,28 @@ type folderControlRecord struct {
 }
 
 type folderControlDocument struct {
-	Schema  int                            `json:"schema"`
-	Folders map[string]folderControlRecord `json:"folders"`
+	Schema        int                            `json:"schema"`
+	Folders       map[string]folderControlRecord `json:"folders"`
+	IgnoredOffers []ignoredFolderOfferRecord     `json:"ignored_offers,omitempty"`
+}
+
+type ignoredFolderOfferRecord struct {
+	FolderID string `json:"folder_id"`
+	DeviceID string `json:"device_id"`
 }
 
 type folderControlStore struct {
-	mu      sync.Mutex
-	path    string
-	records map[string]folderControlRecord
+	mu            sync.Mutex
+	path          string
+	records       map[string]folderControlRecord
+	ignoredOffers map[string]ignoredFolderOfferRecord
 }
 
 func newFolderControlStore(path string, folders []syncthing.ConfiguredFolder, inventory []cards.Card) (*folderControlStore, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("folder control state requires an absolute path")
 	}
-	records, schema, present, err := readFolderControlState(path)
+	records, ignoredOffers, schema, present, err := readFolderControlState(path)
 	if err != nil {
 		return nil, err
 	}
@@ -85,13 +92,58 @@ func newFolderControlStore(path string, folders []syncthing.ConfiguredFolder, in
 	if err := validateFolderControlRecords(records); err != nil {
 		return nil, err
 	}
-	store := &folderControlStore{path: path, records: records}
+	store := &folderControlStore{path: path, records: records, ignoredOffers: ignoredOffers}
 	if changed {
 		if err := store.persistLocked(); err != nil {
 			return nil, err
 		}
 	}
 	return store, nil
+}
+
+func (store *folderControlStore) IgnoredOffers() map[string]bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	result := make(map[string]bool, len(store.ignoredOffers))
+	for key := range store.ignoredOffers {
+		result[key] = true
+	}
+	return result
+}
+
+func (store *folderControlStore) SetOfferIgnored(folderID, deviceID string, ignored bool) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil || !syncthing.ValidFolderID(folderID) {
+		return errors.New("folder offer identity is invalid")
+	}
+	key := folderOfferKey(folderID, deviceID)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, present := store.ignoredOffers[key]
+	if present == ignored {
+		return nil
+	}
+	if ignored {
+		if len(store.ignoredOffers) >= 32 {
+			return errors.New("ignored folder offer limit reached")
+		}
+		store.ignoredOffers[key] = ignoredFolderOfferRecord{FolderID: folderID, DeviceID: deviceID}
+	} else {
+		delete(store.ignoredOffers, key)
+	}
+	if err := store.persistLocked(); err != nil {
+		if ignored {
+			delete(store.ignoredOffers, key)
+		} else {
+			store.ignoredOffers[key] = ignoredFolderOfferRecord{FolderID: folderID, DeviceID: deviceID}
+		}
+		return err
+	}
+	return nil
+}
+
+func folderOfferKey(folderID, deviceID string) string {
+	return folderID + "\n" + deviceID
 }
 
 func (store *folderControlStore) BindingKinds() map[string]string {
@@ -286,40 +338,53 @@ func (store *folderControlStore) CompleteMembership(folderID string) error {
 	return nil
 }
 
-func readFolderControlState(path string) (map[string]folderControlRecord, int, bool, error) {
+func readFolderControlState(path string) (map[string]folderControlRecord, map[string]ignoredFolderOfferRecord, int, bool, error) {
 	records := make(map[string]folderControlRecord)
+	ignoredOffers := make(map[string]ignoredFolderOfferRecord)
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return records, 0, false, nil
+		return records, ignoredOffers, 0, false, nil
 	}
 	if err != nil {
-		return nil, 0, false, err
+		return nil, nil, 0, false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64*1024 {
-		return nil, 0, false, errors.New("folder control state is unsafe")
+		return nil, nil, 0, false, errors.New("folder control state is unsafe")
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, nil, 0, false, err
 	}
 	var document folderControlDocument
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
-		return nil, 0, false, fmt.Errorf("decode folder control state: %w", err)
+		return nil, nil, 0, false, fmt.Errorf("decode folder control state: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || (document.Schema != 1 && document.Schema != 2) ||
-		document.Folders == nil || len(document.Folders) > 16 {
-		return nil, 0, false, errors.New("folder control state is unsupported")
+		document.Folders == nil || len(document.Folders) > 16 || len(document.IgnoredOffers) > 32 {
+		return nil, nil, 0, false, errors.New("folder control state is unsupported")
 	}
 	for folderID, record := range document.Folders {
 		if (document.Schema == 1 && !stringsManagedFolderID(folderID)) ||
 			(document.Schema == 2 && !syncthing.ValidFolderID(folderID)) {
-			return nil, 0, false, errors.New("folder control state contains an invalid folder id")
+			return nil, nil, 0, false, errors.New("folder control state contains an invalid folder id")
 		}
 		records[folderID] = record
 	}
-	return records, document.Schema, true, nil
+	for _, offer := range document.IgnoredOffers {
+		deviceID, err := syncthing.NormalizeDeviceID(offer.DeviceID)
+		if err != nil || !syncthing.ValidFolderID(offer.FolderID) {
+			return nil, nil, 0, false, errors.New("folder control state contains an invalid ignored offer")
+		}
+		offer.DeviceID = deviceID
+		key := folderOfferKey(offer.FolderID, deviceID)
+		if ignoredOffers[key].FolderID != "" {
+			return nil, nil, 0, false, errors.New("folder control state contains a duplicate ignored offer")
+		}
+		ignoredOffers[key] = offer
+	}
+	return records, ignoredOffers, document.Schema, true, nil
 }
 
 func (store *folderControlStore) persistLocked() error {
@@ -332,7 +397,15 @@ func (store *folderControlStore) persistLocked() error {
 	for _, key := range keys {
 		ordered[key] = store.records[key]
 	}
-	payload, err := json.Marshal(folderControlDocument{Schema: 2, Folders: ordered})
+	ignoredOffers := make([]ignoredFolderOfferRecord, 0, len(store.ignoredOffers))
+	for _, offer := range store.ignoredOffers {
+		ignoredOffers = append(ignoredOffers, offer)
+	}
+	sort.Slice(ignoredOffers, func(i, j int) bool {
+		return folderOfferKey(ignoredOffers[i].FolderID, ignoredOffers[i].DeviceID) <
+			folderOfferKey(ignoredOffers[j].FolderID, ignoredOffers[j].DeviceID)
+	})
+	payload, err := json.Marshal(folderControlDocument{Schema: 2, Folders: ordered, IgnoredOffers: ignoredOffers})
 	if err != nil {
 		return err
 	}

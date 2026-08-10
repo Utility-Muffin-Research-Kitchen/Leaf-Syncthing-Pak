@@ -191,7 +191,9 @@ func (runner Runner) Run(ctx context.Context) error {
 	}
 	if b3Folders != nil {
 		initialStatus.Capabilities = append(initialStatus.Capabilities,
-			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOfferPlan, uicontrol.OperationFolderOnboardCreate,
+			uicontrol.OperationFolderOnboardPlan, uicontrol.OperationFolderOfferPlan,
+			uicontrol.OperationFolderOfferIgnore, uicontrol.OperationFolderOfferRestore,
+			uicontrol.OperationFolderOnboardCreate,
 			uicontrol.OperationFolderFirstSyncPrepare, uicontrol.OperationFolderFirstSyncStart,
 			uicontrol.OperationFolderTypeSet, uicontrol.OperationFolderShare, uicontrol.OperationFolderUnshare)
 	}
@@ -214,6 +216,7 @@ func (runner Runner) Run(ctx context.Context) error {
 				current = applyLiveStatusError(current)
 			} else {
 				current = applyLiveStatus(current, live)
+				current = applyIgnoredFolderOffers(current, folderControls.IgnoredOffers())
 			}
 		}
 		current = applyFirstSyncStatus(current, session.FirstSync, folderControls)
@@ -277,6 +280,9 @@ func (runner Runner) Run(ctx context.Context) error {
 			if !found {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The folder offer is no longer available"}
 			}
+			if offer.Ignored {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Restore this ignored folder offer before reviewing it"}
+			}
 			if offer.ReceiveEncrypted || offer.RemoteEncrypted {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Encrypted folder offers are not supported by Leaf"}
 			}
@@ -298,6 +304,20 @@ func (runner Runner) Run(ctx context.Context) error {
 			updated.Onboarding = controlOnboardingStatus(plan)
 			status.Store(updated)
 			return updated, nil
+		},
+		FolderOfferAction: func(operation, folderID, deviceID string) (uicontrol.Status, *uicontrol.ProtocolError) {
+			current := refreshUIStatus()
+			if _, found := findFolderOffer(current, folderID, deviceID); !found {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The folder offer is no longer available"}
+			}
+			ignored := operation == uicontrol.OperationFolderOfferIgnore
+			if operation != uicontrol.OperationFolderOfferIgnore && operation != uicontrol.OperationFolderOfferRestore {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "unsupported-op", Message: "Unsupported folder offer operation"}
+			}
+			if err := folderControls.SetOfferIgnored(folderID, deviceID, ignored); err != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The folder offer preference could not be stored safely"}
+			}
+			return refreshUIStatus(), nil
 		},
 		CreateFolder: func(planID string, statesAcknowledged, manualAcknowledged bool) (uicontrol.Status, *uicontrol.ProtocolError) {
 			if b3Folders == nil {

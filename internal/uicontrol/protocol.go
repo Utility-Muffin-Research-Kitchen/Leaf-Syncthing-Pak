@@ -26,6 +26,8 @@ const (
 	OperationFolderInspect          = "folder.inspect"
 	OperationFolderOnboardPlan      = "folder.onboard.plan"
 	OperationFolderOfferPlan        = "folder.offer.plan"
+	OperationFolderOfferIgnore      = "folder.offer.ignore"
+	OperationFolderOfferRestore     = "folder.offer.restore"
 	OperationFolderOnboardCreate    = "folder.onboard.create"
 	OperationFolderFirstSyncPrepare = "folder.first-sync.prepare"
 	OperationFolderFirstSyncStart   = "folder.first-sync.start"
@@ -242,6 +244,7 @@ type FolderOfferStatus struct {
 	OfferedAt        string `json:"offered_at"`
 	ReceiveEncrypted bool   `json:"receive_encrypted"`
 	RemoteEncrypted  bool   `json:"remote_encrypted"`
+	Ignored          bool   `json:"ignored"`
 }
 
 type Issue struct {
@@ -260,6 +263,7 @@ type Operations struct {
 	FolderInspect     func(string) (Status, *ProtocolError)
 	PlanFolder        func(string, string, string, []string) (Status, *ProtocolError)
 	PlanFolderOffer   func(string, string, string, string, string) (Status, *ProtocolError)
+	FolderOfferAction func(string, string, string) (Status, *ProtocolError)
 	CreateFolder      func(string, bool, bool) (Status, *ProtocolError)
 	PrepareFirstSync  func(string) (Status, *ProtocolError)
 	StartFirstSync    func(string, bool) (Status, *ProtocolError)
@@ -415,6 +419,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		}
 		var operationError *ProtocolError
 		status, operationError = operations.PlanFolderOffer(folderID, deviceID, sourceID, kind, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderOfferIgnore, OperationFolderOfferRestore:
+		if operations.FolderOfferAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, err := decodeFolderMembershipArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder offer action requires a valid offer and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderOfferAction(request.Operation, folderID, deviceID)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}

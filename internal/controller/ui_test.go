@@ -21,3 +21,14 @@ func TestApplyLiveStatusIncludesFolderOffers(t *testing.T) {
 		t.Fatalf("folder offers = %+v", status.FolderOffers)
 	}
 }
+
+func TestApplyIgnoredFolderOffersMatchesFolderAndDevice(t *testing.T) {
+	status := uicontrol.Status{FolderOffers: []uicontrol.FolderOfferStatus{
+		{FolderID: "retro-saves", DeviceID: onboardingPeer},
+		{FolderID: "retro-states", DeviceID: onboardingPeer},
+	}}
+	status = applyIgnoredFolderOffers(status, map[string]bool{folderOfferKey("retro-saves", onboardingPeer): true})
+	if !status.FolderOffers[0].Ignored || status.FolderOffers[1].Ignored {
+		t.Fatalf("folder offers = %+v", status.FolderOffers)
+	}
+}

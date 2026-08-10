@@ -183,7 +183,7 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		return nil, fmt.Errorf("ensure upstream identity: %w", err)
 	}
 	controlPath := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
-	storedControls, controlSchema, _, err := readFolderControlState(controlPath)
+	storedControls, _, controlSchema, _, err := readFolderControlState(controlPath)
 	if err != nil {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("load folder control state: %w", err)

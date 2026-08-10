@@ -78,7 +78,7 @@ diagnostics                        last fixed-path redacted export, if any
 cards[]                            enrolled/configured physical-card rows
 folders[]                          managed-folder rows
 peers[]                            configured and pending peers with connection kind
-folder_offers[]                    pending standard Syncthing folder announcements
+folder_offers[]                    pending or locally ignored Syncthing folder announcements
 issues[]                           display-safe controller/card/folder issues
 capabilities[]                     supported operation names
 ```
@@ -91,8 +91,9 @@ identity, card/kind/path/type, pause state and reasons, sizes, peer count, exact
 list, and scoped issues. Peer rows
 distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
 explicit and are never accepted by a status read. Folder-offer rows include
-the network folder ID and label, offering device ID/name, offer time, and
-encryption flags; status remains read-only and exposes at most 32 offers.
+the network folder ID and label, offering device ID/name, offer time,
+encryption flags, and local `ignored` state; status remains read-only and
+exposes at most 32 offers.
 Counts and byte sizes are
 non-negative; an empty timestamp is unknown. B3 still owns onboarding and
 first-sync release, so a strict pre-existing Leaf binding remains paused for
@@ -242,6 +243,19 @@ the add never happened, without deleting the live Saves/States tree.
 The foreground Folders screen shows a pending-offer count, the offering device,
 and an explicit card/content/direction review; encrypted offers are labeled as
 unsupported and cannot enter the creation flow.
+
+An offer can be hidden without changing the remote Syncthing configuration:
+
+```json
+{"v":1,"id":"ignore","op":"folder.offer.ignore","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+{"v":1,"id":"restore","op":"folder.offer.restore","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+```
+
+The preference is keyed by folder and offering device, stored atomically with
+the existing bounded folder-control state, and survives controller restarts.
+Ignored offers remain visible in a separate count/list state so the user can
+restore and review them later. Planning an ignored offer is rejected until it
+is restored.
 
 ## Device operations
 
