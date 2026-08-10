@@ -133,6 +133,33 @@ func TestSetManagedFolderDevicesAllowsVerifiedLocalOnlyFolder(t *testing.T) {
 	}
 }
 
+func TestRemoveManagedFolderIsVerifiedAndIdempotent(t *testing.T) {
+	folders := `[{"id":"retro-saves"},{"id":"other-folder"}]`
+	deleteCalls := 0
+	process := &Process{client: &http.Client{Transport: uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.Method + " " + request.URL.Path {
+		case "GET /rest/config/folders":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(folders)), Request: request}, nil
+		case "DELETE /rest/config/folders/retro-saves":
+			deleteCalls++
+			folders = `[{"id":"other-folder"}]`
+			return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+			return nil, nil
+		}
+	})}, apiKey: "secret"}
+	if err := process.RemoveManagedFolder(context.Background(), "retro-saves"); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.RemoveManagedFolder(context.Background(), "retro-saves"); err != nil {
+		t.Fatal(err)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("delete calls = %d", deleteCalls)
+	}
+}
+
 func TestManagedFolderMutationRejectsUnsafeInputBeforeAPI(t *testing.T) {
 	calls := 0
 	process := &Process{client: &http.Client{Transport: uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {

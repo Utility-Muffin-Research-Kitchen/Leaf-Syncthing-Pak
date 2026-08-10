@@ -200,3 +200,19 @@ func TestFolderControlStatePersistsDeviceRemovalAndClearsItsOffers(t *testing.T)
 		t.Fatalf("completed device removal = %q, offers=%#v", reloaded.PendingDeviceRemoval(), reloaded.IgnoredOffers())
 	}
 }
+
+func TestFolderControlStatePersistsPendingLocalStop(t *testing.T) {
+	fixture := newFirstSyncFixture(t, "sendonly")
+	if err := fixture.controls.BeginStop(fixture.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := newFolderControlStore(
+		fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder}, []cards.Card{fixture.card},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Snapshot()[fixture.folder.ID].PendingStop {
+		t.Fatalf("reloaded local stop = %+v", reloaded.Snapshot()[fixture.folder.ID])
+	}
+}

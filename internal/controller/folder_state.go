@@ -28,6 +28,7 @@ type folderControlRecord struct {
 	PendingAdd        bool   `json:"pending_add,omitempty"`
 	PendingMembership string `json:"pending_membership,omitempty"`
 	PendingDeviceID   string `json:"pending_device_id,omitempty"`
+	PendingStop       bool   `json:"pending_stop,omitempty"`
 }
 
 type folderControlDocument struct {
@@ -398,6 +399,26 @@ func (store *folderControlStore) CompleteMembership(folderID string) error {
 	return nil
 }
 
+func (store *folderControlStore) BeginStop(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingAdd || record.PendingMembership != "" {
+		return errors.New("folder control state cannot stop this folder")
+	}
+	if record.PendingStop {
+		return nil
+	}
+	record.PendingStop = true
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingStop = false
+		store.records[folderID] = record
+		return err
+	}
+	return nil
+}
+
 func readFolderControlState(path string) (map[string]folderControlRecord, map[string]ignoredFolderOfferRecord, string, int, bool, error) {
 	records := make(map[string]folderControlRecord)
 	ignoredOffers := make(map[string]ignoredFolderOfferRecord)
@@ -561,7 +582,8 @@ func validateFolderControlRecords(records map[string]folderControlRecord) error 
 		if err != nil || markerName != record.MarkerName {
 			return errors.New("folder control state contains an invalid physical binding")
 		}
-		if record.PendingAdd && record.PendingMembership != "" ||
+		if record.PendingAdd && (record.PendingMembership != "" || record.PendingStop) ||
+			record.PendingStop && record.PendingMembership != "" ||
 			(record.PendingMembership == "") != (record.PendingDeviceID == "") ||
 			(record.PendingMembership != "" && record.PendingMembership != "share" && record.PendingMembership != "unshare") {
 			return errors.New("folder control state contains an invalid pending mutation")

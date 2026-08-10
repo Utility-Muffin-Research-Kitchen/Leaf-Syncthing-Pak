@@ -34,6 +34,9 @@ func reconcileManagedFolders(configured []syncthingconfig.ConfiguredFolder, inve
 		if control.PendingMembership != "" {
 			reasons = append(reasons, "membership")
 		}
+		if control.PendingStop {
+			reasons = append(reasons, "stop")
+		}
 		row := uicontrol.FolderStatus{
 			ID: folder.ID, Label: folder.Label, Kind: folder.Kind, Path: folder.Path,
 			Type: folder.Type, State: "idle",

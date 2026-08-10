@@ -608,8 +608,10 @@ int ls_ui_folder_action(const char *socket_path, const char *operation,
     if (strcmp(operation, "folder.pause") != 0 &&
         strcmp(operation, "folder.resume") != 0 &&
         strcmp(operation, "folder.rescan") != 0 &&
-        strcmp(operation, "folder.inspect") != 0 && !rename) goto invalid;
+        strcmp(operation, "folder.inspect") != 0 &&
+        strcmp(operation, "folder.stop") != 0 && !rename) goto invalid;
     if (!cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        (strcmp(operation, "folder.stop") == 0 && !cJSON_AddBoolToObject(arguments, "confirmed", true)) ||
         (rename && (!label || !cJSON_AddStringToObject(arguments, "label", label)))) goto invalid;
     return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
 invalid:

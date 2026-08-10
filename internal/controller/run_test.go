@@ -129,6 +129,12 @@ func (upstream *fakeB3Upstream) SetManagedFolderDevices(_ context.Context, folde
 	return nil
 }
 
+func (upstream *fakeB3Upstream) RemoveManagedFolder(_ context.Context, folderID string) error {
+	delete(upstream.folders, folderID)
+	delete(upstream.paused, folderID)
+	return nil
+}
+
 func (upstream *fakeUpstream) Done() <-chan error { return upstream.done }
 func (upstream *fakeUpstream) Shutdown(context.Context) error {
 	upstream.shutdownCall = true
@@ -483,6 +489,28 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	}
 	if len(upstream.pauseCalls) < 5 || upstream.pauseCalls[len(upstream.pauseCalls)-1] {
 		t.Fatalf("upstream pause transitions = %v", upstream.pauseCalls)
+	}
+	stopped := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
+		`{"v":1,"id":"stop-local","op":"folder.stop","args":{"folder_id":"%s","confirmed":true}}`, folderID))
+	if !stopped.OK || stopped.Result == nil || len(stopped.Result.Folders) != 0 || stopped.Result.Storage == nil || stopped.Result.Storage.SnapshotCount == 0 {
+		t.Fatalf("local folder stop = %+v", stopped)
+	}
+	if _, present := upstream.folders[folderID]; present {
+		t.Fatalf("stopped upstream folder = %#v", upstream.folders[folderID])
+	}
+	if payload, err := os.ReadFile(filepath.Join(saves, "slot.sav")); err != nil || string(payload) != "save-data" {
+		t.Fatalf("live save after local stop = %q, %v", payload, err)
+	}
+	_, markerName, err := cards.BindingNames(card.Identity.ID, "saves")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(saves, markerName)); !os.IsNotExist(err) {
+		t.Fatalf("Leaf marker after local stop = %v", err)
+	}
+	records, _, _, _, _, err = readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
+	if err != nil || len(records) != 0 {
+		t.Fatalf("folder controls after local stop = %#v, %v", records, err)
 	}
 
 	cancel()

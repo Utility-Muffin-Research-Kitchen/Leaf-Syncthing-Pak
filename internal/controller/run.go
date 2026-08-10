@@ -153,6 +153,21 @@ func (runner Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("recover folder membership: %w", err)
 		}
 	}
+	if hasPendingFolderStop(folderControls.Snapshot()) {
+		if b3Folders == nil {
+			_ = shutdownUpstream(upstream)
+			return errors.New("recover local folder stop: upstream folder control is unavailable")
+		}
+		recoveryContext, recoveryCancel := context.WithTimeout(ctx, 15*time.Second)
+		session.Folders, err = recoverPendingFolderStops(
+			recoveryContext, session.Folders, cardInventory, folderControls, b3Folders,
+		)
+		recoveryCancel()
+		if err != nil {
+			_ = shutdownUpstream(upstream)
+			return fmt.Errorf("recover local folder stop: %w", err)
+		}
+	}
 	if folderControls.PendingDeviceRemoval() != "" {
 		if deviceUI == nil {
 			_ = shutdownUpstream(upstream)
@@ -210,7 +225,8 @@ func (runner Runner) Run(ctx context.Context) error {
 			uicontrol.OperationFolderOfferIgnore, uicontrol.OperationFolderOfferRestore,
 			uicontrol.OperationFolderOnboardCreate,
 			uicontrol.OperationFolderFirstSyncPrepare, uicontrol.OperationFolderFirstSyncStart,
-			uicontrol.OperationFolderTypeSet, uicontrol.OperationFolderShare, uicontrol.OperationFolderUnshare)
+			uicontrol.OperationFolderTypeSet, uicontrol.OperationFolderShare, uicontrol.OperationFolderUnshare,
+			uicontrol.OperationFolderStop)
 	}
 	if !foreignConflict.Empty() {
 		initialStatus.Upstream.State = "conflict"
@@ -623,9 +639,38 @@ func (runner Runner) Run(ctx context.Context) error {
 			if !folderSafeForAction(folder) {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The folder safety checks must pass before this action"}
 			}
-			actionContext, actionCancel := context.WithTimeout(ctx, 8*time.Second)
+			actionContext, actionCancel := context.WithTimeout(ctx, 15*time.Second)
 			defer actionCancel()
 			switch operation {
+			case uicontrol.OperationFolderStop:
+				if b3Folders == nil {
+					return uicontrol.Status{}, folderOperationFailure()
+				}
+				configuredFolder, _, configured := findConfiguredFolder(session.Folders, folderID)
+				if !configured {
+					return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The managed folder was not found"}
+				}
+				inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+				if inventoryErr != nil {
+					return uicontrol.Status{}, folderOperationFailure()
+				}
+				card, cardOK := cardForConfiguredFolder(configuredFolder, inventory, folderControls.Snapshot())
+				if !cardOK || !usableEnrolledCard(card) || validateStopMarker(configuredFolder, card, true) != nil {
+					return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "The enrolled card and empty Leaf marker must be safe before stopping this folder"}
+				}
+				if err := folderControls.BeginStop(folderID); err != nil {
+					return uicontrol.Status{}, folderOperationFailure()
+				}
+				session.Folders, inventoryErr = recoverPendingFolderStops(
+					actionContext, session.Folders, inventory, folderControls, b3Folders,
+				)
+				if inventoryErr != nil {
+					return uicontrol.Status{}, folderOperationFailure()
+				}
+				current = applyInventory(current, inventory, session.Folders, folderControls.Snapshot())
+				current = applyFirstSyncStatus(current, session.FirstSync, folderControls)
+				status.Store(current)
+				return refreshUIStatus(), nil
 			case uicontrol.OperationFolderPause:
 				if err := folderControls.SetManual(folderID, true); err != nil {
 					return uicontrol.Status{}, folderOperationFailure()

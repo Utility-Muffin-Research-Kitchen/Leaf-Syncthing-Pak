@@ -75,6 +75,7 @@ int main(void) {
     round_trip("folder-share-request.json", "\"op\":\"folder.share\"");
     round_trip("folder-unshare-request.json", "\"op\":\"folder.unshare\"");
     round_trip("device-remove-request.json", "\"op\":\"device.remove\"");
-    puts("PASS ui-control-v1 C fixture round trip (20 fixtures)");
+    round_trip("folder-stop-request.json", "\"op\":\"folder.stop\"");
+    puts("PASS ui-control-v1 C fixture round trip (21 fixtures)");
     return 0;
 }

@@ -183,6 +183,7 @@ never exposes a free-form path mutation.
 {"v":1,"id":"folder-resume","op":"folder.resume","args":{"folder_id":"leaf-saves-0011223344556677"}}
 {"v":1,"id":"folder-rescan","op":"folder.rescan","args":{"folder_id":"leaf-saves-0011223344556677"}}
 {"v":1,"id":"folder-rename","op":"folder.rename","args":{"folder_id":"leaf-saves-0011223344556677","label":"Leaf Saves"}}
+{"v":1,"id":"folder-stop","op":"folder.stop","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true}}
 ```
 
 `folder.inspect` performs a bounded, symlink-rejecting scan of the validated
@@ -191,6 +192,12 @@ the total count. The device UI combines this with the controller's same-card
 snapshot/version inventory. Pause state is durable before the upstream pause
 request. A rescan requested while paused is durable and queued. Resume refuses
 while any non-manual reason remains, including B3's `first-sync` reason.
+`folder.stop` is a local unbinding operation, not data cleanup. The controller
+durably records the stop, forces the folder paused, removes and verifies the
+upstream folder, removes only the empty card-specific Leaf marker, and clears
+the binding last. Startup completes the same sequence after interruption. The
+live Saves/States tree, safety snapshots, and version history remain intact;
+history cleanup is a separate size-disclosing action.
 
 Creating a folder requires an explicit, non-empty peer selection:
 

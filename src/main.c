@@ -1034,13 +1034,14 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
         LS_FOLDER_RENAME,
         LS_FOLDER_HISTORY,
         LS_FOLDER_CONFLICTS,
+        LS_FOLDER_STOP,
     };
     int focus = 0;
     int inspected = 0;
     for (;;) {
-        cat_options_item items[9];
+        cat_options_item items[10];
         cat_option values[6];
-        int commands[9];
+        int commands[10];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
         cat_options_list_opts options = {0};
@@ -1119,6 +1120,10 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
         commands[item_count] = LS_FOLDER_CONFLICTS;
         items[item_count++] = (cat_options_item){.label = "Conflicts", .type = CAT_OPT_CLICKABLE,
                                                   .options = &values[3], .option_count = 1};
+        if (ls_ui_has_capability(&app->status, "folder.stop")) {
+            commands[item_count] = LS_FOLDER_STOP;
+            items[item_count++] = (cat_options_item){.label = "Stop syncing on Leaf", .type = CAT_OPT_CLICKABLE};
+        }
         options.title = folder->label;
         options.items = items;
         options.item_count = item_count;
@@ -1195,6 +1200,20 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
             ls_show_folder_history(app, folder);
         } else if (command == LS_FOLDER_CONFLICTS) {
             ls_show_folder_conflicts(app, folder);
+        } else if (command == LS_FOLDER_STOP) {
+            char message[1024];
+            snprintf(message, sizeof(message),
+                     "Stop syncing %s on this Leaf?\n\nThe Syncthing folder and Leaf binding are removed only from this device. The live tree remains at:\n%s\n\nLive Saves/States are not deleted. Safety snapshots and version history are also retained and can be cleaned separately.",
+                     folder->label, folder->path);
+            if (ls_confirm(message, "Stop syncing")) {
+                if (ls_ui_folder_action(app->control_socket, "folder.stop", folder->id, NULL,
+                                        &app->status, app->error, sizeof(app->error)) != 0)
+                    ls_message(app->error);
+                else {
+                    ls_message("Syncing stopped on this Leaf. The live Saves/States tree and retained history remain on the card.");
+                    return;
+                }
+            }
         }
         if (app->exit_requested) return;
     }

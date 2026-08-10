@@ -34,6 +34,7 @@ const (
 	OperationFolderTypeSet          = "folder.type.set"
 	OperationFolderShare            = "folder.share"
 	OperationFolderUnshare          = "folder.unshare"
+	OperationFolderStop             = "folder.stop"
 	OperationDeviceAdd              = "device.add"
 	OperationDeviceRename           = "device.rename"
 	OperationDeviceRemove           = "device.remove"
@@ -365,6 +366,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		folderID, err := decodeIDArguments(request.Arguments, "folder_id")
 		if err != nil {
 			return failure(responseID, "bad-arguments", "folder operation requires one valid folder_id")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderAction(request.Operation, folderID, "")
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderStop:
+		if operations.FolderAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, err := decodeConfirmedIDArguments(request.Arguments, "folder_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.stop requires a valid folder_id and confirmation")
 		}
 		var operationError *ProtocolError
 		status, operationError = operations.FolderAction(request.Operation, folderID, "")

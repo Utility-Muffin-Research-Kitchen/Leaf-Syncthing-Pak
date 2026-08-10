@@ -142,6 +142,48 @@ func (process *Process) SetManagedFolderDevices(ctx context.Context, folder Conf
 	return nil
 }
 
+// RemoveManagedFolder is idempotent and verifies the folder is absent from the
+// complete runtime configuration. It never touches the configured filesystem
+// path; local marker and binding cleanup remain controller-owned.
+func (process *Process) RemoveManagedFolder(ctx context.Context, folderID string) error {
+	if !ValidFolderID(folderID) {
+		return errors.New("managed folder id is invalid")
+	}
+	present, err := process.configuredFolderPresent(ctx, folderID)
+	if err != nil || !present {
+		return err
+	}
+	path := "/rest/config/folders/" + url.PathEscape(folderID)
+	if err := process.apiJSON(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return errors.New("remove managed folder through upstream API: " + err.Error())
+	}
+	present, err = process.configuredFolderPresent(ctx, folderID)
+	if err != nil {
+		return errors.New("verify removed managed folder through upstream API: " + err.Error())
+	}
+	if present {
+		return errors.New("upstream managed folder remained configured after removal")
+	}
+	return nil
+}
+
+func (process *Process) configuredFolderPresent(ctx context.Context, folderID string) (bool, error) {
+	var folders []struct {
+		ID string `json:"id"`
+	}
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/config/folders", nil, &folders); err != nil {
+		return false, err
+	}
+	seen := make(map[string]bool, len(folders))
+	for _, folder := range folders {
+		if folder.ID == "" || seen[folder.ID] {
+			return false, errors.New("configured folder list is invalid or duplicated")
+		}
+		seen[folder.ID] = true
+	}
+	return seen[folderID], nil
+}
+
 func sameManagedFolderDevices(left, right []managedFolderDevice) bool {
 	if len(left) != len(right) {
 		return false

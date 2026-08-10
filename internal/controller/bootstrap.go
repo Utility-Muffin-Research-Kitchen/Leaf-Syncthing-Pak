@@ -241,6 +241,9 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 				err = folderControls.Activate(folderID)
 			case !configured[folderID] && record.PendingAdd:
 				err = folderControls.Remove(folderID)
+			case !configured[folderID] && record.PendingStop:
+				// Runtime recovery removes the local marker and binding after
+				// verifying the upstream folder is still absent.
 			case !configured[folderID]:
 				err = errors.New("active registered folder is missing from upstream config")
 			}

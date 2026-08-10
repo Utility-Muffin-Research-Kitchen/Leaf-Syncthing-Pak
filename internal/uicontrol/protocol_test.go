@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 20 {
-		t.Fatalf("checked %d fixtures, want 20", checked)
+	if checked != 21 {
+		t.Fatalf("checked %d fixtures, want 21", checked)
 	}
 }
 
@@ -259,6 +259,10 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 	if !response.OK || operation != OperationFolderInspect || id != "leaf-saves-0011223344556677" {
 		t.Fatalf("folder inspect = %+v, %q %q", response, operation, id)
 	}
+	response = operations.Handle([]byte(`{"v":1,"id":"stop","op":"folder.stop","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true}}`))
+	if !response.OK || operation != OperationFolderStop || id != "leaf-saves-0011223344556677" {
+		t.Fatalf("folder stop = %+v, %q %q", response, operation, id)
+	}
 	peerID := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
 	response = operations.Handle([]byte(`{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"` + peerID + `","confirmed":true}}`))
 	if !response.OK || operation != OperationFolderShare || id != "leaf-saves-0011223344556677" || name != peerID {
@@ -277,6 +281,7 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 		`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"valid","label":"bad\nname"}}`,
 		`{"v":1,"id":"folder","op":"folder.unshare","args":{"folder_id":"valid","device_id":"peer","confirmed":false}}`,
 		`{"v":1,"id":"folder","op":"folder.share","args":{"folder_id":"valid","device_id":"peer","confirmed":true,"extra":true}}`,
+		`{"v":1,"id":"folder","op":"folder.stop","args":{"folder_id":"valid","confirmed":false}}`,
 		`{"v":1,"id":"device","op":"device.add","args":{"device_id":"id","name":"peer","extra":true}}`,
 		`{"v":1,"id":"device","op":"device.remove","args":{"device_id":"peer","confirmed":false}}`,
 	} {
