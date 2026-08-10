@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
@@ -19,6 +21,41 @@ func TestApplyLiveStatusIncludesFolderOffers(t *testing.T) {
 	if len(status.FolderOffers) != 1 || status.FolderOffers[0].FolderID != "retro-saves" ||
 		status.FolderOffers[0].DeviceIDSuffix != "PPPPPPP" || status.FolderOffers[0].DeviceName != "Laptop" {
 		t.Fatalf("folder offers = %+v", status.FolderOffers)
+	}
+}
+
+func TestRecoverPendingDeviceRemoval(t *testing.T) {
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controls.BeginDeviceRemoval(onboardingPeer); err != nil {
+		t.Fatal(err)
+	}
+	upstream := newFakeB3Upstream()
+	if err := recoverPendingDeviceRemoval(context.Background(), onboardingSelf, nil, controls, upstream); err != nil {
+		t.Fatal(err)
+	}
+	if controls.PendingDeviceRemoval() != "" || containsDevice(upstream.devices, onboardingPeer) {
+		t.Fatalf("recovered removal = %q, devices=%v", controls.PendingDeviceRemoval(), upstream.devices)
+	}
+}
+
+func TestRecoverPendingDeviceRemovalRefusesFolderMembership(t *testing.T) {
+	controls, err := newFolderControlStore(filepath.Join(t.TempDir(), folderControlStateName), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controls.BeginDeviceRemoval(onboardingPeer); err != nil {
+		t.Fatal(err)
+	}
+	upstream := newFakeB3Upstream()
+	folders := []syncthing.ConfiguredFolder{{Label: "Leaf Saves", Devices: []string{onboardingSelf, onboardingPeer}}}
+	if err := recoverPendingDeviceRemoval(context.Background(), onboardingSelf, folders, controls, upstream); err == nil {
+		t.Fatal("device removal with a folder membership was recovered")
+	}
+	if controls.PendingDeviceRemoval() != onboardingPeer || !containsDevice(upstream.devices, onboardingPeer) {
+		t.Fatalf("blocked recovery = %q, devices=%v", controls.PendingDeviceRemoval(), upstream.devices)
 	}
 }
 

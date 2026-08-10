@@ -36,6 +36,7 @@ const (
 	OperationFolderUnshare          = "folder.unshare"
 	OperationDeviceAdd              = "device.add"
 	OperationDeviceRename           = "device.rename"
+	OperationDeviceRemove           = "device.remove"
 	OperationResetPrepare           = "reset.prepare"
 	OperationLogLevelSet            = "log.level.set"
 	OperationDiagnosticsExport      = "diagnostics.export"
@@ -513,6 +514,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationDeviceRemove:
+		if operations.DeviceAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		deviceID, err := decodeConfirmedIDArguments(request.Arguments, "device_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "device removal requires a valid device_id and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.DeviceAction(request.Operation, deviceID, "")
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	case OperationResetPrepare:
 		if operations.PrepareReset == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
@@ -759,6 +773,26 @@ func decodeIDArguments(raw json.RawMessage, field string) (string, error) {
 	var value string
 	if err := json.Unmarshal(encoded, &value); err != nil || !validIdentifier(value) {
 		return "", errors.New("invalid id")
+	}
+	return value, nil
+}
+
+func decodeConfirmedIDArguments(raw json.RawMessage, field string) (string, error) {
+	var arguments map[string]json.RawMessage
+	if err := decodeStrictMap(raw, &arguments); err != nil || len(arguments) != 2 {
+		return "", errors.New("invalid confirmed id arguments")
+	}
+	encoded, ok := arguments[field]
+	if !ok {
+		return "", errors.New("missing id")
+	}
+	var value string
+	if err := json.Unmarshal(encoded, &value); err != nil || !validIdentifier(value) {
+		return "", errors.New("invalid id")
+	}
+	var confirmed bool
+	if err := json.Unmarshal(arguments["confirmed"], &confirmed); err != nil || !confirmed {
+		return "", errors.New("confirmation is required")
 	}
 	return value, nil
 }

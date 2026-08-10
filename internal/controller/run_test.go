@@ -90,6 +90,16 @@ func (upstream *fakeB3Upstream) AddPeer(context.Context, string, string, []strin
 
 func (upstream *fakeB3Upstream) RenamePeer(context.Context, string, string) error { return nil }
 
+func (upstream *fakeB3Upstream) RemovePeer(_ context.Context, deviceID, _ string) error {
+	for index, configured := range upstream.devices {
+		if configured == deviceID {
+			upstream.devices = append(upstream.devices[:index], upstream.devices[index+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
 func (upstream *fakeB3Upstream) ConfiguredFolderDevices(context.Context, string) ([]string, error) {
 	return append([]string(nil), upstream.devices...), nil
 }
@@ -400,6 +410,11 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	if !start.OK || start.Result == nil || start.Result.Folders[0].FirstSyncState != "complete" || start.Result.Folders[0].Paused {
 		t.Fatalf("first-sync start = %+v", start)
 	}
+	blockedRemoval := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"remove-shared-peer","op":"device.remove","args":{"device_id":"`+onboardingPeer+`","confirmed":true}}`)
+	if blockedRemoval.OK || blockedRemoval.Error == nil || !containsDevice(upstream.devices, onboardingPeer) {
+		t.Fatalf("shared peer removal = %+v, devices=%v", blockedRemoval, upstream.devices)
+	}
 	share := sendUIControlRequest(t, config.ControlSocket, fmt.Sprintf(
 		`{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"%s","device_id":"%s","confirmed":true}}`, folderID, onboardingOtherPeer))
 	if !share.OK || share.Result == nil || len(share.Result.Folders[0].DeviceIDs) != 3 || share.Result.Folders[0].Paused {
@@ -418,7 +433,15 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		localOnly.Result.Folders[0].Paused {
 		t.Fatalf("folder final unshare = %+v", localOnly)
 	}
-	records, _, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
+	removed := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"remove-peer","op":"device.remove","args":{"device_id":"`+onboardingPeer+`","confirmed":true}}`)
+	if !removed.OK || removed.Result == nil || containsDevice(upstream.devices, onboardingPeer) {
+		t.Fatalf("peer removal = %+v, devices=%v", removed, upstream.devices)
+	}
+	if pending := folderControlsPathPendingDeviceRemoval(t, config); pending != "" {
+		t.Fatalf("pending device removal = %q", pending)
+	}
+	records, _, _, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,6 +489,24 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsDevice(devices []string, deviceID string) bool {
+	for _, configured := range devices {
+		if configured == deviceID {
+			return true
+		}
+	}
+	return false
+}
+
+func folderControlsPathPendingDeviceRemoval(t *testing.T, config Config) string {
+	t.Helper()
+	_, _, pending, _, _, err := readFolderControlState(filepath.Join(config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pending
 }
 
 func TestRunPlansAndAcceptsStandardFolderOffer(t *testing.T) {

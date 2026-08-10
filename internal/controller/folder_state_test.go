@@ -173,3 +173,30 @@ func TestFolderControlStatePersistsIgnoredOffers(t *testing.T) {
 		t.Fatalf("restored offers = %#v", reloaded.IgnoredOffers())
 	}
 }
+
+func TestFolderControlStatePersistsDeviceRemovalAndClearsItsOffers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), folderControlStateName)
+	store, err := newFolderControlStore(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetOfferIgnored("retro-saves", onboardingPeer, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginDeviceRemoval(onboardingPeer); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := newFolderControlStore(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.PendingDeviceRemoval() != onboardingPeer {
+		t.Fatalf("pending device removal = %q", reloaded.PendingDeviceRemoval())
+	}
+	if err := reloaded.CompleteDeviceRemoval(onboardingPeer); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.PendingDeviceRemoval() != "" || len(reloaded.IgnoredOffers()) != 0 {
+		t.Fatalf("completed device removal = %q, offers=%#v", reloaded.PendingDeviceRemoval(), reloaded.IgnoredOffers())
+	}
+}

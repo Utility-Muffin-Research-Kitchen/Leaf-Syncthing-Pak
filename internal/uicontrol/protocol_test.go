@@ -64,8 +64,8 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 19 {
-		t.Fatalf("checked %d fixtures, want 19", checked)
+	if checked != 20 {
+		t.Fatalf("checked %d fixtures, want 20", checked)
 	}
 }
 
@@ -268,12 +268,17 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 	if !response.OK || operation != OperationDeviceAdd || name != "Laptop" {
 		t.Fatalf("device add = %+v, %q %q", response, operation, name)
 	}
+	response = operations.Handle([]byte(`{"v":1,"id":"device","op":"device.remove","args":{"device_id":"` + peerID + `","confirmed":true}}`))
+	if !response.OK || operation != OperationDeviceRemove || id != peerID || name != "" {
+		t.Fatalf("device remove = %+v, %q %q %q", response, operation, id, name)
+	}
 	for _, request := range []string{
 		`{"v":1,"id":"folder","op":"folder.pause","args":{"folder_id":"../bad"}}`,
 		`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"valid","label":"bad\nname"}}`,
 		`{"v":1,"id":"folder","op":"folder.unshare","args":{"folder_id":"valid","device_id":"peer","confirmed":false}}`,
 		`{"v":1,"id":"folder","op":"folder.share","args":{"folder_id":"valid","device_id":"peer","confirmed":true,"extra":true}}`,
 		`{"v":1,"id":"device","op":"device.add","args":{"device_id":"id","name":"peer","extra":true}}`,
+		`{"v":1,"id":"device","op":"device.remove","args":{"device_id":"peer","confirmed":false}}`,
 	} {
 		response = operations.Handle([]byte(request))
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {

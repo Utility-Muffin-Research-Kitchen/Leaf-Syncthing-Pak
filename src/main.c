@@ -1234,7 +1234,7 @@ static void ls_show_peer(ls_app *app, const char *peer_id) {
     int focus = 0;
     for (;;) {
         ls_ui_peer *peer;
-        cat_options_item items[2];
+        cat_options_item items[3];
         cat_option state;
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
                                     {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
@@ -1258,9 +1258,11 @@ static void ls_show_peer(ls_app *app, const char *peer_id) {
         items[0] = (cat_options_item){.label = "Details", .type = CAT_OPT_CLICKABLE,
                                       .options = &state, .option_count = 1};
         items[1] = (cat_options_item){.label = "Rename", .type = CAT_OPT_CLICKABLE};
+        if (ls_ui_has_capability(&app->status, "device.remove"))
+            items[2] = (cat_options_item){.label = "Forget device", .type = CAT_OPT_CLICKABLE};
         options.title = peer->name;
         options.items = items;
-        options.item_count = 2;
+        options.item_count = ls_ui_has_capability(&app->status, "device.remove") ? 3 : 2;
         options.footer = footer;
         options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
         options.initial_selected_index = focus;
@@ -1282,6 +1284,43 @@ static void ls_show_peer(ls_app *app, const char *peer_id) {
                 ls_ui_device_action(app->control_socket, "device.rename", peer->id, keyboard.text,
                                     &app->status, app->error, sizeof(app->error)) != 0)
                 ls_message(app->error);
+        } else if (focus == 2) {
+            char message[1600];
+            size_t used = 0;
+            int memberships = 0;
+            int folder_index;
+            int count;
+            count = snprintf(message, sizeof(message),
+                             "This device is still shared with:\n");
+            if (count > 0 && (size_t)count < sizeof(message)) used = (size_t)count;
+            for (folder_index = 0; folder_index < app->status.folder_count; folder_index++) {
+                ls_ui_folder *folder = &app->status.folders[folder_index];
+                int device_index;
+                for (device_index = 0; device_index < folder->device_count; device_index++) {
+                    if (strcmp(folder->device_ids[device_index], peer->id) == 0) {
+                        memberships++;
+                        if (used < sizeof(message)) {
+                            count = snprintf(message + used, sizeof(message) - used, "\n• %s", folder->label);
+                            if (count > 0 && (size_t)count < sizeof(message) - used) used += (size_t)count;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (memberships > 0) {
+                if (used < sizeof(message))
+                    (void)snprintf(message + used, sizeof(message) - used,
+                                   "\n\nOpen each folder's Sharing screen and unshare this device first. No folder membership is removed automatically.");
+                ls_message(message);
+            } else if (ls_confirm(
+                           "Forget this device? Its peer connection is removed from Leaf. Managed folders and live Saves/States remain intact.",
+                           "Forget")) {
+                if (ls_ui_device_action(app->control_socket, "device.remove", peer->id, NULL,
+                                        &app->status, app->error, sizeof(app->error)) != 0)
+                    ls_message(app->error);
+                else
+                    return;
+            }
         }
     }
 }

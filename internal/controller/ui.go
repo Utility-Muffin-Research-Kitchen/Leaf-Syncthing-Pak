@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,34 @@ type uiUpstream interface {
 	RenameFolder(context.Context, string, string) error
 	AddPeer(context.Context, string, string, []string) error
 	RenamePeer(context.Context, string, string) error
+	RemovePeer(context.Context, string, string) error
+}
+
+func deviceFolderMemberships(folders []syncthing.ConfiguredFolder, deviceID string) []string {
+	result := []string{}
+	for _, folder := range folders {
+		for _, member := range folder.Devices {
+			if member == deviceID {
+				result = append(result, folder.Label)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func recoverPendingDeviceRemoval(ctx context.Context, selfDeviceID string, folders []syncthing.ConfiguredFolder, controls *folderControlStore, upstream uiUpstream) error {
+	deviceID := controls.PendingDeviceRemoval()
+	if deviceID == "" {
+		return nil
+	}
+	if len(deviceFolderMemberships(folders, deviceID)) != 0 {
+		return errors.New("pending device removal still has managed folder memberships")
+	}
+	if err := upstream.RemovePeer(ctx, deviceID, selfDeviceID); err != nil {
+		return err
+	}
+	return controls.CompleteDeviceRemoval(deviceID)
 }
 
 func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol.Status {

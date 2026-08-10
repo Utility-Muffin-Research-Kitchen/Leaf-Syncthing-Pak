@@ -345,6 +345,51 @@ func (process *Process) RenamePeer(ctx context.Context, rawDeviceID, name string
 	return process.patchDevice(ctx, deviceID, map[string]any{"name": name})
 }
 
+// RemovePeer is idempotent so a controller restart can safely complete a
+// durable removal intent. It verifies the exact configured device list before
+// and after the supported runtime-config deletion.
+func (process *Process) RemovePeer(ctx context.Context, rawDeviceID, rawSelfDeviceID string) error {
+	deviceID, err := NormalizeDeviceID(rawDeviceID)
+	if err != nil {
+		return err
+	}
+	selfDeviceID, err := NormalizeDeviceID(rawSelfDeviceID)
+	if err != nil || deviceID == selfDeviceID {
+		return errors.New("cannot remove the local Syncthing device")
+	}
+	present, err := process.configuredPeerPresent(ctx, deviceID)
+	if err != nil || !present {
+		return err
+	}
+	if err := process.apiJSON(ctx, http.MethodDelete, deviceConfigPath(deviceID), nil, nil); err != nil {
+		return fmt.Errorf("remove peer: %w", err)
+	}
+	present, err = process.configuredPeerPresent(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("verify removed peer: %w", err)
+	}
+	if present {
+		return errors.New("upstream peer remained configured after removal")
+	}
+	return nil
+}
+
+func (process *Process) configuredPeerPresent(ctx context.Context, deviceID string) (bool, error) {
+	var devices []uiDevice
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/config/devices", nil, &devices); err != nil {
+		return false, err
+	}
+	seen := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		normalized, err := NormalizeDeviceID(device.DeviceID)
+		if err != nil || seen[normalized] {
+			return false, errors.New("configured device list is invalid or duplicated")
+		}
+		seen[normalized] = true
+	}
+	return seen[deviceID], nil
+}
+
 func NormalizeDeviceID(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	for _, prefix := range []string{"syncthing://device/", "syncthing://"} {

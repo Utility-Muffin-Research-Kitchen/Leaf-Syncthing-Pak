@@ -768,10 +768,13 @@ int ls_ui_device_action(const char *socket_path, const char *operation,
                         const char *device_id, const char *name,
                         ls_ui_status *status, char *error, size_t error_size) {
     cJSON *arguments = cJSON_CreateObject();
-    if (!operation || !device_id || !name || !arguments ||
-        (strcmp(operation, "device.add") != 0 && strcmp(operation, "device.rename") != 0) ||
-        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
-        !cJSON_AddStringToObject(arguments, "name", name)) goto invalid;
+    int remove;
+    if (!operation || !device_id || !arguments) goto invalid;
+    remove = strcmp(operation, "device.remove") == 0;
+    if ((!remove && strcmp(operation, "device.add") != 0 && strcmp(operation, "device.rename") != 0) ||
+        (!remove && !name) || !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        (remove && !cJSON_AddBoolToObject(arguments, "confirmed", true)) ||
+        (!remove && !cJSON_AddStringToObject(arguments, "name", name))) goto invalid;
     return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
 invalid:
     cJSON_Delete(arguments);

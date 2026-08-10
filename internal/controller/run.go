@@ -153,6 +153,21 @@ func (runner Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("recover folder membership: %w", err)
 		}
 	}
+	if folderControls.PendingDeviceRemoval() != "" {
+		if deviceUI == nil {
+			_ = shutdownUpstream(upstream)
+			return errors.New("recover device removal: upstream device control is unavailable")
+		}
+		recoveryContext, recoveryCancel := context.WithTimeout(ctx, 15*time.Second)
+		err = recoverPendingDeviceRemoval(
+			recoveryContext, session.Identity.DeviceID, session.Folders, folderControls, deviceUI,
+		)
+		recoveryCancel()
+		if err != nil {
+			_ = shutdownUpstream(upstream)
+			return fmt.Errorf("recover device removal: %w", err)
+		}
+	}
 	gameState := session.State
 	var status atomic.Value
 	initialStatus := controlStatus(session, gameState, cardInventory, folderControls.Snapshot())
@@ -187,7 +202,7 @@ func (runner Runner) Run(ctx context.Context) error {
 		initialStatus.Capabilities = append(initialStatus.Capabilities,
 			uicontrol.OperationFolderPause, uicontrol.OperationFolderResume,
 			uicontrol.OperationFolderRescan, uicontrol.OperationFolderRename, uicontrol.OperationFolderInspect,
-			uicontrol.OperationDeviceAdd, uicontrol.OperationDeviceRename)
+			uicontrol.OperationDeviceAdd, uicontrol.OperationDeviceRename, uicontrol.OperationDeviceRemove)
 	}
 	if b3Folders != nil {
 		initialStatus.Capabilities = append(initialStatus.Capabilities,
@@ -711,6 +726,25 @@ func (runner Runner) Run(ctx context.Context) error {
 				actionErr = deviceUI.AddPeer(actionContext, deviceID, name, allowed)
 			case uicontrol.OperationDeviceRename:
 				actionErr = deviceUI.RenamePeer(actionContext, deviceID, name)
+			case uicontrol.OperationDeviceRemove:
+				current := refreshUIStatus()
+				peer, found := findPeer(current, deviceID)
+				if !found || peer.Pending {
+					return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "not-found", Message: "The configured peer was not found"}
+				}
+				memberships := deviceFolderMemberships(session.Folders, deviceID)
+				if len(memberships) != 0 {
+					return uicontrol.Status{}, &uicontrol.ProtocolError{
+						Code:    "operation-failed",
+						Message: fmt.Sprintf("Unshare this peer from %d managed folder(s) before forgetting it", len(memberships)),
+					}
+				}
+				if actionErr = folderControls.BeginDeviceRemoval(deviceID); actionErr == nil {
+					actionErr = deviceUI.RemovePeer(actionContext, deviceID, session.Identity.DeviceID)
+				}
+				if actionErr == nil {
+					actionErr = folderControls.CompleteDeviceRemoval(deviceID)
+				}
 			default:
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "unsupported-op", Message: "Unsupported device operation"}
 			}

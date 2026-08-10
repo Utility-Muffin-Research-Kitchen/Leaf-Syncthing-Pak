@@ -77,6 +77,36 @@ func TestUIActionsValidateAndConstrainUpstreamMutations(t *testing.T) {
 	}
 }
 
+func TestRemovePeerIsVerifiedAndIdempotent(t *testing.T) {
+	devices := `[{"deviceID":"` + managedSelf + `"},{"deviceID":"` + managedPeer + `"}]`
+	deleteCalls := 0
+	process := &Process{client: &http.Client{Transport: uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.Method + " " + request.URL.Path {
+		case "GET /rest/config/devices":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(devices)), Request: request}, nil
+		case "DELETE /rest/config/devices/" + managedPeer:
+			deleteCalls++
+			devices = `[{"deviceID":"` + managedSelf + `"}]`
+			return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+			return nil, nil
+		}
+	})}, apiKey: "secret"}
+	if err := process.RemovePeer(context.Background(), managedPeer, managedSelf); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.RemovePeer(context.Background(), managedPeer, managedSelf); err != nil {
+		t.Fatal(err)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("delete calls = %d", deleteCalls)
+	}
+	if err := process.RemovePeer(context.Background(), managedSelf, managedSelf); err == nil {
+		t.Fatal("local device removal was accepted")
+	}
+}
+
 func roundTripMap(t *testing.T, responses map[string]string) http.RoundTripper {
 	t.Helper()
 	return uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
