@@ -276,6 +276,11 @@ The controller accepts a canonical device id or a `syncthing://` device URI.
 New peers always use dynamic addresses, never become introducers, never
 auto-accept folders, and inherit the current route-derived LAN boundary.
 Pending devices are shown by status but require this explicit add operation.
+After a successful add, the foreground UI offers **Share existing folders?**
+and presents every unshared managed folder as an explicit Include/Exclude
+checklist, defaulting to Exclude. Each selected `folder.share` is independently
+durable and verified; unselected folders and all other peer memberships remain
+unchanged.
 Removal is refused while any managed folder still includes the peer. The UI
 lists those folders and directs the user to each Sharing screen; it never
 silently changes memberships. Once none remain, the controller stores a

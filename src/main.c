@@ -1219,17 +1219,108 @@ static void ls_show_folder_actions(ls_app *app, const char *folder_id) {
     }
 }
 
+static void ls_share_existing_folders(ls_app *app, const char *device_id) {
+    static cat_option choices[] = {
+        {.label = "Exclude", .value = "exclude"},
+        {.label = "Include", .value = "include"},
+    };
+    cat_options_item items[LS_UI_MAX_FOLDERS];
+    char folder_ids[LS_UI_MAX_FOLDERS][65];
+    cat_footer_item footer[] = {
+        {.button = CAT_BTN_B, .label = "Cancel"},
+        {.button = CAT_BTN_LEFT, .label = "Change", .button_text = "<->"},
+        {.button = CAT_BTN_START, .label = "Share", .is_confirm = true},
+    };
+    cat_options_list_opts options = {0};
+    cat_options_list_result result = {0};
+    int index;
+    int count = 0;
+    int selected = 0;
+    if (!app || !device_id) return;
+    ls_refresh(app);
+    if (!app->controller_available) {
+        ls_message(app->error);
+        return;
+    }
+    memset(items, 0, sizeof(items));
+    memset(folder_ids, 0, sizeof(folder_ids));
+    for (index = 0; index < app->status.folder_count; index++) {
+        ls_ui_folder *folder = &app->status.folders[index];
+        if (ls_folder_has_device(folder, device_id)) continue;
+        snprintf(folder_ids[count], sizeof(folder_ids[count]), "%s", folder->id);
+        items[count] = (cat_options_item){
+            .label = folder->label,
+            .type = CAT_OPT_STANDARD,
+            .options = choices,
+            .option_count = 2,
+            .selected_option = 0,
+        };
+        count++;
+    }
+    if (count == 0) return;
+    options.title = "Share Existing Folders?";
+    options.items = items;
+    options.item_count = count;
+    options.footer = footer;
+    options.footer_count = cat_hints_enabled_from_env() ? 3 : 0;
+    options.confirm_button = CAT_BTN_START;
+    options.help_text = "Choose exactly which existing folders to share with this device. Excluded folders remain unchanged.";
+    for (;;) {
+        if (cat_options_list(&options, &result) == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
+        if (result.action != CAT_ACTION_CONFIRMED) continue;
+        selected = 0;
+        for (index = 0; index < count; index++) {
+            if (items[index].selected_option == 1) selected++;
+        }
+        if (selected == 0) {
+            ls_message("No folders selected. The peer was added without changing any existing folder.");
+            return;
+        }
+        break;
+    }
+    {
+        char message[256];
+        snprintf(message, sizeof(message), "Share %d selected folder%s with this device? Every other folder and peer remains unchanged.",
+                 selected, selected == 1 ? "" : "s");
+        if (!ls_confirm(message, "Share")) return;
+    }
+    for (index = 0; index < count; index++) {
+        ls_ui_folder *folder;
+        char label[97];
+        char message[512];
+        if (items[index].selected_option != 1) continue;
+        folder = ls_find_folder(app, folder_ids[index]);
+        snprintf(label, sizeof(label), "%.96s", folder ? folder->label : folder_ids[index]);
+        if (!folder || ls_ui_folder_membership(app->control_socket, "folder.share",
+                                                folder_ids[index], device_id, &app->status,
+                                                app->error, sizeof(app->error)) != 0) {
+            snprintf(message, sizeof(message), "Could not share %s. Completed selections remain shared and the pending folder action is recoverable.\n\n%s",
+                     label, app->error[0] ? app->error : "The folder is no longer available.");
+            ls_message(message);
+            return;
+        }
+    }
+    ls_message("The selected existing folders are now shared with this device.");
+}
+
 static int ls_add_peer(ls_app *app, const char *device_id, const char *suggested_name) {
     cat_keyboard_result name = {0};
+    char stable_device_id[128];
+    char prompt[320];
     const char *initial = suggested_name && suggested_name[0] ? suggested_name : "Syncthing peer";
+    if (!device_id || snprintf(stable_device_id, sizeof(stable_device_id), "%s", device_id) >= (int)sizeof(stable_device_id)) return -1;
     if (cat_keyboard(initial, "Name this peer. Unknown devices and folders are never accepted automatically.",
                      CAT_KB_GENERAL, &name) != CAT_OK || !name.text[0]) return 0;
     if (!ls_confirm("Add this peer? It cannot add folders automatically, and LAN-only applies unless you change the network profile.", "Add"))
         return 0;
-    if (ls_ui_device_action(app->control_socket, "device.add", device_id, name.text,
+    if (ls_ui_device_action(app->control_socket, "device.add", stable_device_id, name.text,
                             &app->status, app->error, sizeof(app->error)) != 0) {
         ls_message(app->error);
         return -1;
+    }
+    if (app->status.folder_count > 0 && ls_ui_has_capability(&app->status, "folder.share")) {
+        snprintf(prompt, sizeof(prompt), "%.64s was added. Share existing folders now? You will choose each folder explicitly.", name.text);
+        if (ls_confirm(prompt, "Choose folders")) ls_share_existing_folders(app, stable_device_id);
     }
     return 1;
 }
