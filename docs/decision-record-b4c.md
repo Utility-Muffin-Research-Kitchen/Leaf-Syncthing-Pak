@@ -1,21 +1,20 @@
 # B4c multi-device implementation checkpoint
 
-**Status:** Implementation in progress; full interoperability qualification pending
+**Status:** Implementation complete; Android/non-Leaf handheld qualification pending
 
-**Date:** 2026-08-10
+**Date:** 2026-08-11
 
 **Candidates:** `Leaf-Syncthing-Pak` branch
 `agent/syncthing-multi-device`; `Jawaka` branch
 `agent/syncthing-check-before-stop`
 
-**Device:** MLP1 ADB serial `f40098e329c73533`, two enrolled physical VFAT
-cards, standard Syncthing v2.1.2 peer
+**Devices:** Two physical MLP1 units, two enrolled physical VFAT cards on the
+first unit, and an unmodified standard Linux Syncthing peer
 
 This checkpoint follows
 `umrk-workspace/plans/leaf-syncthing/phases/phase-b4c-multi-device-interoperability.md`.
 It records implemented and directly verified behavior without claiming the
-remaining desktop, Android/non-Leaf handheld, or second-Leaf qualification
-matrix.
+remaining Android/non-Leaf handheld qualification or B5 documentation handoff.
 
 ## Implemented result
 
@@ -169,14 +168,80 @@ and States folders, and the standard VPS peer still present. Exiting the UI
 returned to Jawaka cleanly (`app exited status=0`); CTL-1 then still reported
 the Syncthing service enabled, running, and LIFE-1 subscribed.
 
-This is non-destructive resume/completion evidence, not a substitute for the
-remaining factory-clean Create and Join journey qualification.
+This was the initial non-destructive resume/completion pass. The following
+factory-clean Create and Join qualification closed that remaining device gap.
+
+## Factory-clean Create and Join evidence
+
+A second physical MLP1 was reset to a new Syncthing identity and driven through
+the actual 960x720 controller UI. The clean journey started with the service
+disabled, enabled **Start with Leaf**, enrolled the intended card, displayed
+Leaf's device ID and QR code, and required explicit acceptance and naming of
+pending peers. No browser administration or manual Syncthing configuration was
+used for the Leaf side.
+
+The **Create a Saves share** path selected the Primary card, selected both the
+standard Linux hub and the first MLP1 in the peer checklist, chose **Merge
+both**, and showed the exact card, path, content kind, direction, and peers
+before creation. The folder was created paused, a same-card safety snapshot was
+made, hub versioning was explained, and synchronization began only after the
+second explicit confirmation. A unique fixture transferred to the unmodified
+Linux peer with an identical SHA-256 digest.
+
+The device was then fully reset again without changing the live Saves or States
+trees. The Linux Syncthing v2.1.3 peer offered a new folder, and the actual
+**Join an existing Saves share** path showed the offer and source device before
+the user selected the card, Saves, direction, and exact final review. Leaf kept
+the offered network folder ID while supplying `/media/sdcard1/Saves`, its own
+physical-card binding, marker, first-sync pause, snapshot, and same-card
+versioning. Transfers in both directions completed with matching SHA-256
+digests. The UI ended at **Guided setup: Complete** and **Status: Up to date**,
+with the selected peer reporting current and zero needed bytes.
+
+The same UI pass also confirmed the separate **Create** versus **Join** choice,
+the warned States opt-in, multi-peer selection, the Thing-File first-sync
+warning, and the resumable prepare/start/completion states.
+
+## Second-Leaf same-folder evidence
+
+The first MLP1 then shared its existing empty `ra-saves` network folder with
+the clean second MLP1. The second unit accepted that exact offer through the
+same controller onboarding operations, prepared its first sync, and reached
+current over a direct local connection.
+
+Both devices reported the same network folder ID, `ra-saves`, while retaining
+different enrolled card IDs (`1d27f6e6…3f6923a5` and
+`edf642e0…9bafd10e`), different first-sync snapshots, and independent local
+paths and version stores. The first MLP1 simultaneously retained the standard
+Linux peer on the same folder. Both Leaf devices reported idle/current, zero
+needed bytes, and no controller issues. This is physical evidence that the
+one-local-folder-per-`(card-id, kind)` safety rule does not prevent multiple
+Leaf devices from joining one shared network folder.
+
+## Second-device reboot and cleanup evidence
+
+A reboot through Jawaka's kernel action restarted the second MLP1, autostarted
+the enabled Syncthing service, restored the correct card-bound folder path, and
+returned the standard peer and folder to current. This particular reboot did
+not exchange its mountpoints; all pre/post live-tree hashes were identical.
+The earlier first-device reboot in this record remains the physical
+mountpoint-swap qualification and proved automatic relocation by durable card
+ID.
+
+Qualification cleanup used the normal unshare, local-stop, device-removal,
+service-stop, and full-reset paths. The first MLP1 was restored to only its
+original Linux peer with `ra-saves` and `ra-states` idle/current. The second
+MLP1 finished disabled, with its generated identity/configuration/index absent
+and its live Saves/States trees empty. A 19-file post-Join evidence and rollback
+copy remains under the second card's qualification directory. Only the exact
+temporary Linux qualification folder was removed from the standard peer.
 
 ## Remaining qualification
 
-- Run the complete PC-first, Leaf-first, later-peer, Android/non-Leaf handheld,
-  and second-Leaf journeys with real clients and transfer data.
-- Run factory-clean physical Create and Join passes through the guided journey,
-  then finish the documentation handoff.
+- Run the Android or non-Leaf handheld journey with a real client and real
+  bidirectional transfer data. Linux-first, Leaf-first, later-peer, multi-peer,
+  and second-Leaf paths now have physical evidence.
+- Exercise the public B5 setup, add/remove-later, conflict-recovery, and
+  per-platform path instructions with representative users and clients.
 - Stamp and verify only the eventual B5 release artifacts; this checkpoint
   authorizes no tag, catalog mutation, or production release.
