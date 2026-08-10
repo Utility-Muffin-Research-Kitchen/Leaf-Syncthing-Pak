@@ -26,6 +26,13 @@ later share, unshare, device removal, local stop, retained-history cleanup, and
 first-run status are controller-owned and recoverable. Live Saves/States are
 not deleted by local stop or cleanup.
 
+The foreground journey now names its exact resumable action on the overview:
+enroll or fix a card, connect a device, set up Saves, finish first sync, wait
+for syncing, or fix an issue. An already enrolled but absent/read-only card is
+no longer described as needing enrollment. When several physical cards have
+independent Saves shares, the journey asks which durable card-bound share to
+continue instead of selecting one by array or mountpoint order.
+
 The LIFE-1 extension adds an optional mode-stop `check_before_stop` exchange.
 The controller checks only managed Saves/States on the launch's resolved card.
 It reports current only when local need is zero and every selected peer is
@@ -151,10 +158,25 @@ removed the temporary ROM and its library row, and left both managed folders
 idle/current. Leaf reported zero retained version bytes, no active game, one
 connected direct VPS peer, and no issues.
 
+## Guided-status device evidence
+
+The final MLP1 foreground binary (`SHA-256`
+`b97b446b47c592cbca2f19b1d5280e71a19d983deb0990324a269ae23df53e1e`)
+matched its staged file byte-for-byte. On the existing configured two-card
+device, a native 960x720 framebuffer capture showed `Start with Leaf: On`,
+`Guided setup: Complete`, and `Status: Up to date`, with two cards, the Saves
+and States folders, and the standard VPS peer still present. Exiting the UI
+returned to Jawaka cleanly (`app exited status=0`); CTL-1 then still reported
+the Syncthing service enabled, running, and LIFE-1 subscribed.
+
+This is non-destructive resume/completion evidence, not a substitute for the
+remaining factory-clean Create and Join journey qualification.
+
 ## Remaining qualification
 
 - Run the complete PC-first, Leaf-first, later-peer, Android/non-Leaf handheld,
   and second-Leaf journeys with real clients and transfer data.
-- Finish the single guided first-run screen journey and documentation handoff.
+- Run factory-clean physical Create and Join passes through the guided journey,
+  then finish the documentation handoff.
 - Stamp and verify only the eventual B5 release artifacts; this checkpoint
   authorizes no tag, catalog mutation, or production release.

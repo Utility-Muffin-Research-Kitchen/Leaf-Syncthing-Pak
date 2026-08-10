@@ -858,6 +858,38 @@ const char *ls_ui_top_state_label(ls_ui_top_state state) {
     return "Needs attention";
 }
 
+const char *ls_ui_guided_progress_label(const ls_ui_status *status) {
+    ls_ui_status_summary summary = {0};
+    int enrolled_cards = 0;
+    int usable_cards = 0;
+    int configured_peers = 0;
+    int saves_count = 0;
+    int index;
+    if (!status || strcmp(status->controller, "running") != 0) return "Start";
+    for (index = 0; index < status->card_count; index++) {
+        const ls_ui_card *card = &status->cards[index];
+        if (card->enrolled) enrolled_cards++;
+        if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
+    }
+    if (usable_cards == 0) return enrolled_cards > 0 ? "Fix card" : "Enroll card";
+    for (index = 0; index < status->peer_count; index++) {
+        if (!status->peers[index].pending) configured_peers++;
+    }
+    if (configured_peers == 0) return "Connect device";
+    for (index = 0; index < status->folder_count; index++) {
+        const ls_ui_folder *folder = &status->folders[index];
+        if (strcmp(folder->kind, "saves") != 0) continue;
+        saves_count++;
+        if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0)
+            return "Finish first sync";
+    }
+    if (saves_count == 0) return "Set up Saves";
+    if (ls_ui_summarize_status(status, &summary) != 0) return "Check status";
+    if (summary.state == LS_UI_SYNCING) return "Syncing";
+    if (summary.state == LS_UI_NEEDS_ATTENTION) return "Fix issue";
+    return "Complete";
+}
+
 const char *ls_ui_folder_state_label(const ls_ui_folder *folder) {
     if (!folder || folder->conflict_count > 0 || folder->paused || folder->peer_count <= 0 ||
         !folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0 ||

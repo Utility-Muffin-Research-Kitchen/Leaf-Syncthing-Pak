@@ -428,6 +428,60 @@ static const char *ls_choose_folder_type(const char *title) {
     return selected >= 0 ? values[selected] : NULL;
 }
 
+static int ls_usable_card_count(const ls_ui_status *status) {
+    int count = 0;
+    int index;
+    if (!status) return 0;
+    for (index = 0; index < status->card_count; index++) {
+        const ls_ui_card *card = &status->cards[index];
+        if (card->enrolled && card->present && card->writable && !card->duplicate_id) count++;
+    }
+    return count;
+}
+
+static int ls_enrolled_card_count(const ls_ui_status *status) {
+    int count = 0;
+    int index;
+    if (!status) return 0;
+    for (index = 0; index < status->card_count; index++) {
+        if (status->cards[index].enrolled) count++;
+    }
+    return count;
+}
+
+static int ls_configured_peer_count(const ls_ui_status *status) {
+    int count = 0;
+    int index;
+    if (!status) return 0;
+    for (index = 0; index < status->peer_count; index++) {
+        if (!status->peers[index].pending) count++;
+    }
+    return count;
+}
+
+static int ls_choose_saves_folder(ls_app *app, char *folder_id, size_t folder_id_size) {
+    char labels[LS_UI_MAX_FOLDERS][192];
+    const char *label_ptrs[LS_UI_MAX_FOLDERS];
+    int folder_indexes[LS_UI_MAX_FOLDERS];
+    int count = 0;
+    int index;
+    int selected;
+    if (!app || !folder_id || folder_id_size == 0) return -1;
+    for (index = 0; index < app->status.folder_count; index++) {
+        ls_ui_folder *folder = &app->status.folders[index];
+        if (strcmp(folder->kind, "saves") != 0) continue;
+        snprintf(labels[count], sizeof(labels[count]), "%s · %s · card ...%s", folder->label,
+                 ls_ui_folder_state_label(folder), ls_identity_suffix(folder->card_id));
+        label_ptrs[count] = labels[count];
+        folder_indexes[count++] = index;
+    }
+    if (count == 0) return 0;
+    selected = count == 1 ? 0 : ls_choose_labels("Choose Saves Share", label_ptrs, count);
+    if (selected < 0) return -1;
+    return snprintf(folder_id, folder_id_size, "%s",
+                    app->status.folders[folder_indexes[selected]].id) < (int)folder_id_size ? 1 : -1;
+}
+
 static int ls_choose_folder_card(ls_app *app, char *source_id, size_t source_size) {
     cat_options_item items[LS_UI_MAX_CARDS];
     cat_option values[LS_UI_MAX_CARDS];
@@ -1947,10 +2001,13 @@ static int ls_wait_for_controller(ls_app *app) {
 
 static void ls_guided_setup(ls_app *app) {
     int index;
-    int usable_cards = 0;
-    int configured_peers = 0;
+    int enrolled_cards;
+    int usable_cards;
+    int configured_peers;
     int pending_offers = 0;
+    int saves_selection;
     ls_ui_folder *saves = NULL;
+    char saves_id[65] = {0};
     ls_ui_status_summary summary = {0};
 
     ls_refresh(app);
@@ -1978,47 +2035,39 @@ static void ls_guided_setup(ls_app *app) {
     }
     if (!app->controller_available && !ls_wait_for_controller(app)) return;
 
-    for (index = 0; index < app->status.card_count; index++) {
-        ls_ui_card *card = &app->status.cards[index];
-        if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
-    }
+    enrolled_cards = ls_enrolled_card_count(&app->status);
+    usable_cards = ls_usable_card_count(&app->status);
     if (usable_cards == 0) {
-        ls_message("Step 2 of 5: enroll the card whose Saves folder you want to sync. Setup resumes from this point if you leave.");
+        ls_message(enrolled_cards > 0
+            ? "Step 2 of 5: make an enrolled card available and writable. Leaf follows the card identity if rebooting swaps mountpoints. Setup resumes from this point if you leave."
+            : "Step 2 of 5: enroll the card whose Saves folder you want to sync. Setup resumes from this point if you leave.");
         ls_show_cards(app);
         ls_refresh(app);
-        for (index = 0; index < app->status.card_count; index++) {
-            ls_ui_card *card = &app->status.cards[index];
-            if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
-        }
+        enrolled_cards = ls_enrolled_card_count(&app->status);
+        usable_cards = ls_usable_card_count(&app->status);
         if (usable_cards == 0) {
-            ls_message("No writable card is enrolled yet. Your setup progress is safe; return to Guided setup when the card is ready.");
+            ls_message(enrolled_cards > 0
+                ? "No enrolled card is ready yet. Insert it or resolve its read-only or duplicate-ID warning, then return to Guided setup."
+                : "No writable card is enrolled yet. Your setup progress is safe; return to Guided setup when the card is ready.");
             return;
         }
     }
 
-    for (index = 0; index < app->status.peer_count; index++) {
-        if (!app->status.peers[index].pending) configured_peers++;
-    }
+    configured_peers = ls_configured_peer_count(&app->status);
     if (configured_peers == 0) {
         ls_message("Step 3 of 5: connect another Syncthing device. Show Leaf's device ID or QR, add a peer by ID, or review a pending device in the next screen.");
         ls_show_devices(app);
         ls_refresh(app);
-        for (index = 0; index < app->status.peer_count; index++) {
-            if (!app->status.peers[index].pending) configured_peers++;
-        }
+        configured_peers = ls_configured_peer_count(&app->status);
         if (configured_peers == 0) {
             ls_message("No peer is connected yet. Pairing can finish on either device; return to Guided setup afterward.");
             return;
         }
     }
 
-    for (index = 0; index < app->status.folder_count; index++) {
-        if (strcmp(app->status.folders[index].kind, "saves") == 0) {
-            saves = &app->status.folders[index];
-            break;
-        }
-    }
-    if (!saves) {
+    saves_selection = ls_choose_saves_folder(app, saves_id, sizeof(saves_id));
+    if (saves_selection < 0) return;
+    if (saves_selection == 0) {
         static const char *const folder_choices[] = {"Create a Saves share", "Join an existing Saves share"};
         for (index = 0; index < app->status.folder_offer_count; index++) {
             if (!app->status.folder_offers[index].ignored) pending_offers++;
@@ -2035,25 +2084,19 @@ static void ls_guided_setup(ls_app *app) {
             else ls_add_folder_kind(app, "saves");
         }
         ls_refresh(app);
-        for (index = 0; index < app->status.folder_count; index++) {
-            if (strcmp(app->status.folders[index].kind, "saves") == 0) {
-                saves = &app->status.folders[index];
-                break;
-            }
-        }
-        if (!saves) {
+        if (ls_choose_saves_folder(app, saves_id, sizeof(saves_id)) <= 0) {
             ls_message("A Saves folder has not been created yet. Setup will resume here.");
             return;
         }
     }
+    saves = ls_find_folder(app, saves_id);
+    if (!saves) return;
 
     if (!saves->first_sync_state[0] || strcmp(saves->first_sync_state, "complete") != 0) {
-        char folder_id[sizeof(saves->id)];
-        snprintf(folder_id, sizeof(folder_id), "%s", saves->id);
         ls_message("Step 5 of 5: review first-sync safety and explicitly start the first sync. Receive-capable folders create the required same-card snapshot first.");
-        ls_first_sync_flow(app, folder_id);
+        ls_first_sync_flow(app, saves_id);
         ls_refresh(app);
-        saves = ls_find_folder(app, folder_id);
+        saves = ls_find_folder(app, saves_id);
         if (!saves || !saves->first_sync_state[0] || strcmp(saves->first_sync_state, "complete") != 0) {
             ls_message("First-sync protection is still waiting for your review. Setup will resume here.");
             return;
@@ -2077,13 +2120,14 @@ static void ls_guided_setup(ls_app *app) {
         return;
     }
     if (strcmp(ls_ui_folder_state_label(saves), "Needs attention") == 0) {
-        char folder_id[sizeof(saves->id)];
         char message[512];
-        snprintf(folder_id, sizeof(folder_id), "%s", saves->id);
-        snprintf(message, sizeof(message), "Saves setup needs attention%s%s. Open its actions now?",
-                 saves->remote_peer[0] ? ": " : "",
-                 saves->remote_peer[0] ? saves->remote_peer : "");
-        if (ls_confirm(message, "Open folder")) ls_show_folder_actions(app, folder_id);
+        (void)ls_ui_summarize_status(&app->status, &summary);
+        snprintf(message, sizeof(message), "%s\n\nGuided setup is safe to leave and resume. Open the relevant details now?",
+                 summary.message[0] ? summary.message : "Saves setup needs attention.");
+        if (ls_confirm(message, app->status.issue_count > 0 ? "Open issues" : "Open folder")) {
+            if (app->status.issue_count > 0) ls_show_issues(app);
+            else ls_show_folder_actions(app, saves_id);
+        }
         return;
     }
 
@@ -2128,7 +2172,6 @@ static void ls_run_overview(ls_app *app) {
         int item_count = 0;
         int action;
         int recovery_pending;
-        int saves_configured = 0;
         ls_refresh(app);
         recovery_pending = app->controller_available &&
                            strcmp(app->status.controller, "recovery-pending") == 0;
@@ -2150,14 +2193,7 @@ static void ls_run_overview(ls_app *app) {
         snprintf(setup_value, sizeof(setup_value), "%s", "Start");
         if (app->controller_available) {
             (void)ls_ui_summarize_status(&app->status, &summary);
-            for (int folder_index = 0; folder_index < app->status.folder_count; folder_index++) {
-                if (strcmp(app->status.folders[folder_index].kind, "saves") == 0) {
-                    saves_configured = 1;
-                    break;
-                }
-            }
-            snprintf(setup_value, sizeof(setup_value), "%s",
-                     saves_configured && summary.state == LS_UI_UP_TO_DATE ? "Complete" : "Continue");
+            snprintf(setup_value, sizeof(setup_value), "%s", ls_ui_guided_progress_label(&app->status));
             snprintf(card_value, sizeof(card_value), "%d", app->status.card_count);
             if (app->status.folder_offer_count > 0)
                 snprintf(folder_value, sizeof(folder_value), "%d · %d offers",

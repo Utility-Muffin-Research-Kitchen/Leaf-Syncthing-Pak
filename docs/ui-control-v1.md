@@ -135,6 +135,12 @@ peer, folder-binding, first-sync, and live completion state. It enables and
 starts Syncthing, enrolls a card, connects a peer, explicitly chooses Create or
 Join for Saves, presents the exact peer checklist, asks for the initial
 direction in plain language, and reuses the B3 snapshot/first-sync flow.
+The overview names that next action directly (`Enroll card`, `Fix card`,
+`Connect device`, `Set up Saves`, `Finish first sync`, `Syncing`, or `Fix
+issue`) instead of a generic continue label. If several cards already have
+independent Saves shares, the journey asks which share to continue and
+identifies each by its durable card suffix; it never guesses from the current
+mountpoint or changes the other shares.
 
 The journey does not finish at configuration acceptance. Its selected Saves
 folder must have completed first-sync protection, have zero local need, and

@@ -146,6 +146,19 @@ int main(void) {
            strcmp(status.folders[0].device_ids[1], "PEER") == 0);
     assert(strcmp(status.folders[0].first_sync_state, "ready") == 0 &&
            status.folders[0].snapshot_files == 3 && status.folders[0].snapshot_bytes == 4096);
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Finish first sync") == 0);
+    status.cards[0].present = false;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Fix card") == 0);
+    status.cards[0].enrolled = false;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Enroll card") == 0);
+    status.cards[0].enrolled = true;
+    status.cards[0].present = true;
+    status.peers[0].pending = true;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Connect device") == 0);
+    status.peers[0].pending = false;
+    status.folder_count = 0;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Set up Saves") == 0);
+    status.folder_count = 1;
     assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Needs attention") == 0);
     {
         ls_ui_status_summary summary;
@@ -165,16 +178,19 @@ int main(void) {
         assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Syncing") == 0);
         assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_SYNCING &&
                summary.need_bytes == 7 && summary.need_items == 2);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Syncing") == 0);
 
         snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "current");
         status.folders[0].remote_need_bytes = 0;
         status.folders[0].remote_need_items = 0;
         assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Up to date") == 0);
         assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_UP_TO_DATE);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Complete") == 0);
 
         snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "offline");
         assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_NEEDS_ATTENTION &&
                strstr(summary.message, "Laptop") != NULL);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Fix issue") == 0);
     }
     puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");
     return 0;
