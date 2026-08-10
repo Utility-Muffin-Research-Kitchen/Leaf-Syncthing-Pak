@@ -290,6 +290,11 @@ int ls_ui_diagnostics_export(const char *socket_path,
                              ls_ui_status *status,
                              char *error,
                              size_t error_size);
+int ls_ui_storage_cleanup(const char *socket_path,
+                          const ls_ui_storage_row *row,
+                          ls_ui_status *status,
+                          char *error,
+                          size_t error_size);
 int ls_ui_parse_response(const char *payload,
                          size_t payload_size,
                          const char *request_id,

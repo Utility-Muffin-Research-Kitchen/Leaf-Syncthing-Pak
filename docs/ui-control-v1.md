@@ -199,6 +199,23 @@ the binding last. Startup completes the same sequence after interruption. The
 live Saves/States tree, safety snapshots, and version history remain intact;
 history cleanup is a separate size-disclosing action.
 
+## Retained history cleanup
+
+The Storage screen can remove one exact snapshot or one Saves/States version
+history group. The request repeats the selected inventory row, including the
+byte count shown at confirmation time:
+
+```json
+{"v":1,"id":"storage-cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"first-sync-20260809T123456Z-deadbeef","bytes":4096,"confirmed":true}}
+```
+
+The controller rebuilds the symlink-rejecting inventory and requires exactly
+one row to match every field. A changed size requires the user to review and
+confirm again. First-sync snapshots cannot be removed while their protection
+is pending, and active version history requires its managed folder to be
+paused. Only the selected state root is removed; the live Saves/States tree is
+never a cleanup target.
+
 Creating a folder requires an explicit, non-empty peer selection:
 
 ```json

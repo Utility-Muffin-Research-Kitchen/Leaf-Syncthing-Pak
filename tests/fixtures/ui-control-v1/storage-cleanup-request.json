@@ -1,0 +1,1 @@
+{"v":1,"id":"fixture-storage-cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"first-sync-20260809T123456Z-deadbeef","bytes":4096,"confirmed":true}}

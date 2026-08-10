@@ -64,8 +64,37 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 21 {
-		t.Fatalf("checked %d fixtures, want 21", checked)
+	if checked != 22 {
+		t.Fatalf("checked %d fixtures, want 22", checked)
+	}
+}
+
+func TestStorageCleanupRequiresExactConfirmedInventoryRow(t *testing.T) {
+	var gotCard, gotCategory, gotKind, gotName string
+	var gotBytes int64
+	operations := Operations{
+		Status: fixtureStatus,
+		CleanupStorage: func(card, category, kind, name string, bytes int64) (Status, *ProtocolError) {
+			gotCard, gotCategory, gotKind, gotName, gotBytes = card, category, kind, name, bytes
+			return fixtureStatus(), nil
+		},
+	}
+	request := `{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"first-sync-20260809T123456Z-deadbeef","bytes":4096,"confirmed":true}}`
+	response := operations.Handle([]byte(request))
+	if !response.OK || gotCard != "ccddeeff" || gotCategory != "snapshot" || gotKind != "saves" ||
+		gotName != "first-sync-20260809T123456Z-deadbeef" || gotBytes != 4096 {
+		t.Fatalf("storage cleanup = %+v, got %q %q %q %q %d", response, gotCard, gotCategory, gotKind, gotName, gotBytes)
+	}
+	for _, unsafe := range []string{
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":4096,"confirmed":false}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":-1,"confirmed":true}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"live","kind":"saves","name":"snapshot","bytes":4096,"confirmed":true}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":4096,"confirmed":true,"extra":true}}`,
+	} {
+		response = operations.Handle([]byte(unsafe))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe storage cleanup accepted: %s = %+v", unsafe, response)
+		}
 	}
 }
 

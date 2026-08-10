@@ -41,6 +41,7 @@ const (
 	OperationResetPrepare           = "reset.prepare"
 	OperationLogLevelSet            = "log.level.set"
 	OperationDiagnosticsExport      = "diagnostics.export"
+	OperationStorageCleanup         = "storage.cleanup"
 	MaxIdentifier                   = 64
 )
 
@@ -275,6 +276,7 @@ type Operations struct {
 	PrepareReset      func(string) (Status, *ProtocolError)
 	SetLogLevel       func(string) (Status, *ProtocolError)
 	ExportDiagnostics func() (Status, *ProtocolError)
+	CleanupStorage    func(string, string, string, string, int64) (Status, *ProtocolError)
 }
 
 // Handle validates one request and returns one bounded response. Request
@@ -579,6 +581,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationStorageCleanup:
+		if operations.CleanupStorage == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		cardSuffix, category, kind, name, bytes, err := decodeStorageCleanupArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "storage.cleanup requires one exact confirmed inventory row")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.CleanupStorage(cardSuffix, category, kind, name, bytes)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	default:
 		return failure(responseID, "unsupported-op", "unsupported UI control operation")
 	}
@@ -864,6 +879,30 @@ func decodeLogLevelArguments(raw json.RawMessage) (string, error) {
 		return "", errors.New("invalid log level")
 	}
 	return arguments.Level, nil
+}
+
+func decodeStorageCleanupArguments(raw json.RawMessage) (string, string, string, string, int64, error) {
+	var arguments struct {
+		CardSuffix string `json:"card_suffix"`
+		Category   string `json:"category"`
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		Bytes      int64  `json:"bytes"`
+		Confirmed  bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", "", "", 0, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		!validDisplayText(arguments.CardSuffix, 16) ||
+		(arguments.Category != "snapshot" && arguments.Category != "versions") ||
+		(arguments.Kind != "saves" && arguments.Kind != "states") ||
+		!validDisplayText(arguments.Name, 128) || arguments.Bytes < 0 || arguments.Bytes > 9007199254740991 {
+		return "", "", "", "", 0, errors.New("invalid storage cleanup arguments")
+	}
+	return arguments.CardSuffix, arguments.Category, arguments.Kind, arguments.Name, arguments.Bytes, nil
 }
 
 func decodeStrictMap(raw json.RawMessage, target *map[string]json.RawMessage) error {

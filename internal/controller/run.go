@@ -199,7 +199,8 @@ func (runner Runner) Run(ctx context.Context) error {
 		})
 	}
 	initialStatus.Capabilities = append(initialStatus.Capabilities,
-		uicontrol.OperationResetPrepare, uicontrol.OperationLogLevelSet, uicontrol.OperationDiagnosticsExport)
+		uicontrol.OperationResetPrepare, uicontrol.OperationLogLevelSet,
+		uicontrol.OperationDiagnosticsExport, uicontrol.OperationStorageCleanup)
 	if network != nil {
 		networkStatus := network.Status()
 		initialStatus.Network = &networkStatus
@@ -842,6 +843,34 @@ func (runner Runner) Run(ctx context.Context) error {
 				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Redacted diagnostics could not be exported"}
 			}
 			updated.Diagnostics = &diagnostics
+			status.Store(updated)
+			return updated, nil
+		},
+		CleanupStorage: func(cardSuffix, category, kind, name string, bytes int64) (uicontrol.Status, *uicontrol.ProtocolError) {
+			inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
+			if inventoryErr != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "Retained storage could not be verified"}
+			}
+			current := refreshUIStatus()
+			if cleanupErr := cleanupStorageRow(
+				inventory, current, folderControls.Snapshot(), cardSuffix, category, kind, name, bytes,
+			); cleanupErr != nil {
+				message := "The selected retained history could not be cleaned safely"
+				if strings.Contains(cleanupErr.Error(), "pause the managed folder") {
+					message = "Pause this managed folder before cleaning its active version history"
+				} else if strings.Contains(cleanupErr.Error(), "first-sync protection") {
+					message = "Complete first-sync protection before cleaning these snapshots"
+				} else if strings.Contains(cleanupErr.Error(), "changed after confirmation") {
+					message = "Retained storage changed; review the current size and confirm again"
+				}
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: message}
+			}
+			updated := status.Load().(uicontrol.Status)
+			storage, storageErr := storageInventory(inventory)
+			if storageErr != nil {
+				return uicontrol.Status{}, &uicontrol.ProtocolError{Code: "operation-failed", Message: "History was cleaned but its refreshed inventory is unavailable"}
+			}
+			updated.Storage = &storage
 			status.Store(updated)
 			return updated, nil
 		},

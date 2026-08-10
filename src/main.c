@@ -1647,10 +1647,12 @@ static void ls_show_storage(ls_app *app) {
     char snapshots[32];
     char versions[32];
     cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
-                                {.button = CAT_BTN_A, .label = "Details", .is_confirm = true}};
+                                {.button = CAT_BTN_A, .label = "Details", .is_confirm = true},
+                                {.button = CAT_BTN_Y, .label = "Clean"}};
     cat_options_list_opts options = {0};
     cat_options_list_result result = {0};
     int index;
+    bool can_cleanup;
     ls_refresh(app);
     if (!app->controller_available || !app->status.storage_present) {
         ls_message(app->error[0] ? app->error : "Snapshot and version inventory is unavailable.");
@@ -1681,9 +1683,34 @@ static void ls_show_storage(ls_app *app) {
     options.items = items;
     options.item_count = app->status.storage_row_count + 1;
     options.footer = footer;
-    options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
+    can_cleanup = ls_ui_has_capability(&app->status, "storage.cleanup");
+    options.footer_count = cat_hints_enabled_from_env() ? (can_cleanup ? 3 : 2) : 0;
+    if (can_cleanup) options.secondary_action_button = CAT_BTN_Y;
     if (cat_options_list(&options, &result) == CAT_CANCELLED ||
         result.action == CAT_ACTION_BACK) return;
+    if (result.action == CAT_ACTION_SECONDARY_TRIGGERED && result.focused_index > 0 &&
+        result.focused_index <= app->status.storage_row_count && can_cleanup) {
+        ls_ui_storage_row row = app->status.storage_rows[result.focused_index - 1];
+        char bytes[32];
+        char warning[768];
+        ls_format_bytes(row.bytes, bytes, sizeof(bytes));
+        snprintf(warning, sizeof(warning),
+                 "Clean %s?\n\nType: %s\nCard: ...%s\nSize now: %s\n\nOnly this retained %s is removed. Live Saves/States are never part of this action.%s",
+                 row.name, row.category, row.card_suffix, bytes, row.category,
+                 strcmp(row.category, "versions") == 0 ? " Pause an active folder first." : "");
+        if (ls_confirm(warning, "Clean")) {
+            if (ls_ui_storage_cleanup(app->control_socket, &row, &app->status,
+                                      app->error, sizeof(app->error)) != 0)
+                ls_message(app->error);
+            else
+                ls_message("Selected retained history cleaned. Live Saves/States remain intact.");
+        }
+        return;
+    }
+    if (result.action == CAT_ACTION_SECONDARY_TRIGGERED && result.focused_index == 0) {
+        ls_message("Choose one snapshot or version-history row to clean.");
+        return;
+    }
     if (result.action != CAT_ACTION_SELECTED) return;
     if (result.focused_index == 0) {
         ls_message(total_text);

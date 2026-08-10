@@ -820,6 +820,23 @@ int ls_ui_diagnostics_export(const char *socket_path, ls_ui_status *status,
                           status, error, error_size);
 }
 
+int ls_ui_storage_cleanup(const char *socket_path, const ls_ui_storage_row *row,
+                          ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !row || row->bytes < 0 || row->bytes > 9007199254740991LL ||
+        !cJSON_AddStringToObject(arguments, "card_suffix", row->card_suffix) ||
+        !cJSON_AddStringToObject(arguments, "category", row->category) ||
+        !cJSON_AddStringToObject(arguments, "kind", row->kind) ||
+        !cJSON_AddStringToObject(arguments, "name", row->name) ||
+        !cJSON_AddNumberToObject(arguments, "bytes", (double)row->bytes) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, "storage.cleanup", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create retained-history cleanup request");
+    return -1;
+}
+
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {
     int index;
     if (!status || !operation) return false;
