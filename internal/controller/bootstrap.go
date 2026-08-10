@@ -45,6 +45,7 @@ type Config struct {
 	Mode            life1.Mode
 	AckMS           int
 	WaitMS          int
+	CheckBeforeStop bool
 	RetryDelay      time.Duration
 }
 
@@ -52,6 +53,8 @@ type Lifecycle interface {
 	Close() error
 	Next(context.Context) (life1.Event, error)
 	SendReady(string) error
+	SendWaiting(string, int, int64) error
+	SendStop(string) error
 	SendError(string, string) error
 }
 
@@ -119,7 +122,8 @@ func LoadConfig() (Config, error) {
 		Sources:         environment.Sources,
 		Mode:            life1.ModeStop,
 		AckMS:           life1.DefaultAckMS,
-		WaitMS:          life1.DefaultWaitMS,
+		WaitMS:          life1.DefaultCheckWaitMS,
+		CheckBeforeStop: true,
 		RetryDelay:      DefaultRetry,
 	}, nil
 }
@@ -293,11 +297,12 @@ func (runner Runner) establishLifecycle(ctx context.Context) (Lifecycle, life1.G
 	}
 	for {
 		lifecycle, state, err := connect(ctx, life1.Config{
-			SocketPath: runner.Config.DaemonSocket,
-			ServiceID:  ServiceID,
-			Mode:       runner.Config.Mode,
-			AckMS:      runner.Config.AckMS,
-			WaitMS:     runner.Config.WaitMS,
+			SocketPath:      runner.Config.DaemonSocket,
+			ServiceID:       ServiceID,
+			Mode:            runner.Config.Mode,
+			AckMS:           runner.Config.AckMS,
+			WaitMS:          runner.Config.WaitMS,
+			CheckBeforeStop: runner.Config.CheckBeforeStop,
 		})
 		if err == nil {
 			return lifecycle, state, nil
@@ -350,6 +355,9 @@ func (config Config) validate() error {
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {
 		return fmt.Errorf("leaf-syncthing: unsupported game mode %q", config.Mode)
+	}
+	if config.CheckBeforeStop && config.Mode != life1.ModeStop {
+		return errors.New("leaf-syncthing: check-before-stop requires stop mode")
 	}
 	if config.AckMS < 0 || config.WaitMS < 0 || config.RetryDelay < 0 {
 		return errors.New("leaf-syncthing: lifecycle timings must be non-negative")

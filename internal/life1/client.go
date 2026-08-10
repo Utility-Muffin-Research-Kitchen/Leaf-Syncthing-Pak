@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
-	DefaultAckMS    = 250
-	DefaultWaitMS   = 0
+	ProtocolVersion    = 1
+	DefaultAckMS       = 250
+	DefaultWaitMS      = 0
+	DefaultCheckWaitMS = 15000
 )
 
 type Mode string
@@ -40,12 +41,13 @@ var (
 )
 
 type Config struct {
-	SocketPath string
-	ServiceID  string
-	Mode       Mode
-	AckMS      int
-	WaitMS     int
-	Timeout    time.Duration
+	SocketPath      string
+	ServiceID       string
+	Mode            Mode
+	AckMS           int
+	WaitMS          int
+	CheckBeforeStop bool
+	Timeout         time.Duration
 }
 
 type ProtocolError struct {
@@ -61,14 +63,15 @@ func (e ProtocolError) Error() string {
 }
 
 type SubscribeRequest struct {
-	Version   int      `json:"v"`
-	Operation string   `json:"op"`
-	ID        string   `json:"id"`
-	Events    []string `json:"events"`
-	ServiceID string   `json:"service_id"`
-	Mode      Mode     `json:"mode"`
-	AckMS     int      `json:"ack_ms"`
-	WaitMS    int      `json:"wait_ms"`
+	Version         int      `json:"v"`
+	Operation       string   `json:"op"`
+	ID              string   `json:"id"`
+	Events          []string `json:"events"`
+	ServiceID       string   `json:"service_id"`
+	Mode            Mode     `json:"mode"`
+	AckMS           int      `json:"ack_ms"`
+	WaitMS          int      `json:"wait_ms"`
+	CheckBeforeStop bool     `json:"check_before_stop,omitempty"`
 }
 
 type subscribeResponse struct {
@@ -168,6 +171,7 @@ func Connect(ctx context.Context, config Config) (*Subscription, GameState, erro
 		Version: ProtocolVersion, Operation: "subscribe", ID: subscribeID,
 		Events: []string{"game"}, ServiceID: config.ServiceID, Mode: config.Mode,
 		AckMS: config.AckMS, WaitMS: config.WaitMS,
+		CheckBeforeStop: config.CheckBeforeStop,
 	}
 	if err := subscription.writeJSON(request); err != nil {
 		subscription.Close()
@@ -284,6 +288,30 @@ func (s *Subscription) SendReady(launchID string) error {
 	}{ProtocolVersion, "ready", launchID})
 }
 
+func (s *Subscription) SendWaiting(launchID string, pendingItems int, pendingBytes int64) error {
+	if launchID == "" || pendingItems < 0 || pendingBytes < 0 {
+		return errors.New("life1: waiting status requires a launch id and non-negative pending work")
+	}
+	return s.writeJSON(struct {
+		Version      int    `json:"v"`
+		Status       string `json:"status"`
+		LaunchID     string `json:"launch_id"`
+		PendingItems int    `json:"pending_items"`
+		PendingBytes int64  `json:"pending_bytes"`
+	}{ProtocolVersion, "waiting", launchID, pendingItems, pendingBytes})
+}
+
+func (s *Subscription) SendStop(launchID string) error {
+	if launchID == "" {
+		return errors.New("life1: stop launch id is empty")
+	}
+	return s.writeJSON(struct {
+		Version  int    `json:"v"`
+		Status   string `json:"status"`
+		LaunchID string `json:"launch_id"`
+	}{ProtocolVersion, "stop", launchID})
+}
+
 func (s *Subscription) SendError(launchID, reason string) error {
 	if launchID == "" || reason == "" {
 		return errors.New("life1: error status requires launch id and reason")
@@ -357,6 +385,9 @@ func validateConfig(config Config) error {
 	if config.Mode != ModeNotify && config.Mode != ModeStop {
 		return fmt.Errorf("life1: invalid mode %q", config.Mode)
 	}
+	if config.CheckBeforeStop && config.Mode != ModeStop {
+		return errors.New("life1: check-before-stop requires stop mode")
+	}
 	if config.AckMS < 0 || config.WaitMS < 0 {
 		return errors.New("life1: ack and wait values must be non-negative")
 	}
@@ -388,17 +419,17 @@ func decodeEvent(payload json.RawMessage) (Event, error) {
 		return Event{}, protocolError("event", errors.New("invalid version or launch id"))
 	}
 	switch event.Name {
-	case "game.start":
+	case "game.start", "game.check":
 		if err := requireJSONFields(payload, "v", "event", "launch_id", "source_id", "saves_path", "states_path", "wait_budget_ms"); err != nil {
-			return Event{}, protocolError("game.start", err)
+			return Event{}, protocolError(event.Name, err)
 		}
 		if event.SourceID != "primary" && event.SourceID != "secondary_sd" {
-			return Event{}, protocolError("game.start", errors.New("invalid source"))
+			return Event{}, protocolError(event.Name, errors.New("invalid source"))
 		}
 		if event.WaitBudgetMS == nil || *event.WaitBudgetMS < 0 || *event.WaitBudgetMS > 15000 {
-			return Event{}, protocolError("game.start", errors.New("invalid wait budget"))
+			return Event{}, protocolError(event.Name, errors.New("invalid wait budget"))
 		}
-	case "game.cancel", "game.finish":
+	case "game.cancel", "game.abort", "game.finish":
 		if err := requireJSONFields(payload, "v", "event", "launch_id"); err != nil {
 			return Event{}, protocolError(event.Name, err)
 		}

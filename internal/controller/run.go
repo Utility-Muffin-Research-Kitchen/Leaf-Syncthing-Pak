@@ -31,6 +31,10 @@ type gatewayUpstream interface {
 	GatewayTransport() http.RoundTripper
 }
 
+type gameCheckUpstream interface {
+	ReadGameCheckStatus(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error)
+}
+
 type StartProcessFunc func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error)
 type LoadCardsFunc func(leaf.SourceList, string) ([]cards.Card, error)
 type EnrollCardFunc func(leaf.Source) (cards.Identity, bool, error)
@@ -103,6 +107,7 @@ func (runner Runner) Run(ctx context.Context) error {
 	}
 	deviceUI, _ := upstream.(uiUpstream)
 	b3Folders, _ := upstream.(b3FolderUpstream)
+	gameChecks, _ := upstream.(gameCheckUpstream)
 	onboarding := newOnboardingManager(runner.OnboardingOptions)
 	var browserGateway *gatewayserver.Manager
 	if gatewayUpstream, ok := upstream.(gatewayUpstream); ok {
@@ -181,6 +186,18 @@ func (runner Runner) Run(ctx context.Context) error {
 		if err != nil {
 			_ = shutdownUpstream(upstream)
 			return fmt.Errorf("recover device removal: %w", err)
+		}
+	}
+	if b3Folders != nil {
+		relocationContext, relocationCancel := context.WithTimeout(ctx, 30*time.Second)
+		session.Folders, err = relocateManagedFolders(
+			relocationContext, session.Folders, cardInventory,
+			folderControls.Snapshot(), b3Folders,
+		)
+		relocationCancel()
+		if err != nil {
+			_ = shutdownUpstream(upstream)
+			return fmt.Errorf("relocate managed folders: %w", err)
 		}
 	}
 	gameState := session.State
@@ -900,6 +917,13 @@ func (runner Runner) Run(ctx context.Context) error {
 		}()
 	}
 	startLifecycleReader(session.Lifecycle)
+	var gameCheckCancel context.CancelFunc
+	gameCheckLaunchID := ""
+	defer func() {
+		if gameCheckCancel != nil {
+			gameCheckCancel()
+		}
+	}()
 	var upstreamDone <-chan error
 	if upstream != nil {
 		upstreamDone = upstream.Done()
@@ -974,6 +998,11 @@ func (runner Runner) Run(ctx context.Context) error {
 					return shutdownUpstream(upstream)
 				}
 				_ = session.Lifecycle.Close()
+				if gameCheckCancel != nil {
+					gameCheckCancel()
+					gameCheckCancel = nil
+					gameCheckLaunchID = ""
+				}
 				replacement, state, err := runner.establishLifecycle(ctx)
 				if err != nil {
 					if ctx.Err() != nil {
@@ -995,10 +1024,45 @@ func (runner Runner) Run(ctx context.Context) error {
 				startLifecycleReader(replacement)
 				continue
 			}
-			if err := handleLifecycleEvent(session.Lifecycle, result.event); err != nil {
-				return err
+			event := result.event
+			if event.Name == "game.check" {
+				if gameCheckLaunchID != event.LaunchID {
+					if gameCheckCancel != nil {
+						gameCheckCancel()
+					}
+					selected, selectErr := foldersForGameCheck(
+						event, cardInventory, session.Folders, folderControls.Snapshot())
+					if selectErr != nil {
+						if runner.Logf != nil {
+							runner.Logf("check-before-stop rejected: %v", selectErr)
+						}
+						if sendErr := session.Lifecycle.SendError(event.LaunchID, "unsafe-card-binding"); sendErr != nil {
+							return fmt.Errorf("reject game.check: %w", sendErr)
+						}
+						gameCheckCancel = nil
+					} else {
+						checkContext, checkCancel := context.WithCancel(runContext)
+						gameCheckCancel = checkCancel
+						go runGameCheck(checkContext, session.Lifecycle, gameChecks,
+							selected, session.Identity.DeviceID, event,
+							runner.Config.AckMS, runner.Logf)
+					}
+					gameCheckLaunchID = event.LaunchID
+				}
+			} else {
+				if (event.Name == "game.cancel" || event.Name == "game.abort" ||
+					event.Name == "game.finish") && event.LaunchID == gameCheckLaunchID {
+					if gameCheckCancel != nil {
+						gameCheckCancel()
+					}
+					gameCheckCancel = nil
+					gameCheckLaunchID = ""
+				}
+				if err := handleLifecycleEvent(session.Lifecycle, event); err != nil {
+					return err
+				}
 			}
-			gameState = reconcileGameState(gameState, result.event)
+			gameState = reconcileGameState(gameState, event)
 			updated := status.Load().(uicontrol.Status)
 			updated.Game = uicontrol.GameStatus{Active: gameState.Active, LaunchID: gameState.LaunchID, SourceID: gameState.SourceID}
 			status.Store(updated)
@@ -1200,12 +1264,12 @@ func sourceLabel(source leaf.Source) string {
 
 func reconcileGameState(current life1.GameState, event life1.Event) life1.GameState {
 	switch event.Name {
-	case "game.start":
+	case "game.start", "game.check":
 		return life1.GameState{
 			Active: true, LaunchID: event.LaunchID, SourceID: event.SourceID,
 			SavesPath: event.SavesPath, StatesPath: event.StatesPath,
 		}
-	case "game.finish":
+	case "game.abort", "game.finish":
 		if current.LaunchID == event.LaunchID {
 			return life1.GameState{}
 		}
@@ -1233,7 +1297,7 @@ func handleLifecycleEvent(lifecycle Lifecycle, event life1.Event) error {
 		if err := lifecycle.SendError(event.LaunchID, "pause-unavailable"); err != nil {
 			return fmt.Errorf("reject game.start: %w", err)
 		}
-	case "game.cancel", "game.finish":
+	case "game.cancel", "game.abort", "game.finish":
 		// Mode stop receives no game events. Retain the protocol no-op so a
 		// runtime policy override cannot turn an ignorable finish into failure.
 	default:

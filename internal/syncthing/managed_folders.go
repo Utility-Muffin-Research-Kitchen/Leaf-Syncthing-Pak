@@ -117,6 +117,44 @@ func (process *Process) SetManagedFolderType(ctx context.Context, folder Configu
 	return nil
 }
 
+// RelocateManagedFolder changes only the local path and same-card versioning
+// path while keeping the folder paused. The controller calls this after it has
+// matched one enrolled physical card by card-id and validated that card's
+// custom marker at the new mountpoint.
+func (process *Process) RelocateManagedFolder(ctx context.Context, folder ConfiguredFolder) error {
+	request, err := managedFolderAPIRequest(folder)
+	if err != nil {
+		return err
+	}
+	path := "/rest/config/folders/" + url.PathEscape(folder.ID)
+	patch := map[string]any{"paused": true, "path": request.Path}
+	if request.Versioning != nil {
+		patch["versioning"] = request.Versioning
+	}
+	if err := process.apiJSON(ctx, http.MethodPatch, path, patch, nil); err != nil {
+		return errors.New("relocate managed folder through upstream API: " + err.Error())
+	}
+	var current struct {
+		Path       string                   `json:"path"`
+		Paused     bool                     `json:"paused"`
+		Versioning *managedFolderVersioning `json:"versioning"`
+	}
+	if err := process.apiJSON(ctx, http.MethodGet, path, nil, &current); err != nil {
+		return errors.New("verify relocated managed folder through upstream API: " + err.Error())
+	}
+	valid := current.Paused && filepath.Clean(current.Path) == request.Path
+	if request.Versioning != nil {
+		valid = valid && current.Versioning != nil &&
+			current.Versioning.Type == request.Versioning.Type &&
+			current.Versioning.FSType == request.Versioning.FSType &&
+			filepath.Clean(current.Versioning.FSPath) == request.Versioning.FSPath
+	}
+	if !valid {
+		return errors.New("upstream managed folder location did not match the enrolled card")
+	}
+	return nil
+}
+
 // SetManagedFolderDevices atomically pauses a managed folder while replacing
 // its exact membership, then verifies the resulting upstream configuration.
 func (process *Process) SetManagedFolderDevices(ctx context.Context, folder ConfiguredFolder) error {

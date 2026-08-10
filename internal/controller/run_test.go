@@ -123,6 +123,11 @@ func (upstream *fakeB3Upstream) SetManagedFolderType(_ context.Context, folder s
 	return nil
 }
 
+func (upstream *fakeB3Upstream) RelocateManagedFolder(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
+	upstream.folders[folder.ID] = folder
+	return nil
+}
+
 func (upstream *fakeB3Upstream) SetManagedFolderDevices(_ context.Context, folder syncthingconfig.ConfiguredFolder) error {
 	upstream.folders[folder.ID] = folder
 	upstream.paused[folder.ID] = true

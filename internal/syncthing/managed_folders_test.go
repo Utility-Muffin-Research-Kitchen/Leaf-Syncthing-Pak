@@ -133,6 +133,47 @@ func TestSetManagedFolderDevicesAllowsVerifiedLocalOnlyFolder(t *testing.T) {
 	}
 }
 
+func TestRelocateManagedFolderPatchesAndVerifiesPausedPaths(t *testing.T) {
+	requests := 0
+	root := t.TempDir()
+	path := filepath.Join(root, "Saves")
+	versions := filepath.Join(root, ".userdata", "mlp1", "Syncthing", "versions", "saves")
+	process := &Process{client: &http.Client{Transport: uiRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Method == http.MethodGet {
+			body := `{"path":` + mustJSON(path) + `,"paused":true,"versioning":{"type":"simple","fsPath":` + mustJSON(versions) + `,"fsType":"basic"}}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		}
+		var patch map[string]json.RawMessage
+		payload, _ := io.ReadAll(request.Body)
+		if err := json.Unmarshal(payload, &patch); err != nil {
+			t.Fatal(err)
+		}
+		if request.Method != http.MethodPatch || request.URL.Path != "/rest/config/folders/ra-saves" ||
+			string(patch["paused"]) != "true" || string(patch["path"]) != mustJSON(path) || patch["versioning"] == nil {
+			t.Fatalf("relocation patch = %s %s %s", request.Method, request.URL.Path, payload)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+	})}, apiKey: "secret"}
+	folder := ConfiguredFolder{
+		ID: "ra-saves", Label: "ra-saves", Kind: "saves", Path: path,
+		Type: "sendreceive", MarkerName: ".leaf-saves-001122334455", Paused: true,
+		VersioningType: "simple", VersioningFSPath: versions, VersioningFSType: "basic",
+		Devices: []string{managedSelf, managedPeer},
+	}
+	if err := process.RelocateManagedFolder(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("relocation calls = %d", requests)
+	}
+}
+
+func mustJSON(value string) string {
+	payload, _ := json.Marshal(value)
+	return string(payload)
+}
+
 func TestRemoveManagedFolderIsVerifiedAndIdempotent(t *testing.T) {
 	folders := `[{"id":"retro-saves"},{"id":"other-folder"}]`
 	deleteCalls := 0

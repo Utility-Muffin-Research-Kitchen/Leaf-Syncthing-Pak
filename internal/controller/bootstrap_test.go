@@ -15,10 +15,12 @@ import (
 )
 
 type fakeLifecycle struct {
-	closed bool
-	next   func(context.Context) (life1.Event, error)
-	ready  func(string) error
-	reject func(string, string) error
+	closed  bool
+	next    func(context.Context) (life1.Event, error)
+	ready   func(string) error
+	waiting func(string, int, int64) error
+	stop    func(string) error
+	reject  func(string, string) error
 }
 
 func (lifecycle *fakeLifecycle) Close() error {
@@ -37,6 +39,20 @@ func (lifecycle *fakeLifecycle) Next(ctx context.Context) (life1.Event, error) {
 func (lifecycle *fakeLifecycle) SendReady(launchID string) error {
 	if lifecycle.ready != nil {
 		return lifecycle.ready(launchID)
+	}
+	return nil
+}
+
+func (lifecycle *fakeLifecycle) SendWaiting(launchID string, pendingItems int, pendingBytes int64) error {
+	if lifecycle.waiting != nil {
+		return lifecycle.waiting(launchID, pendingItems, pendingBytes)
+	}
+	return nil
+}
+
+func (lifecycle *fakeLifecycle) SendStop(launchID string) error {
+	if lifecycle.stop != nil {
+		return lifecycle.stop(launchID)
 	}
 	return nil
 }
