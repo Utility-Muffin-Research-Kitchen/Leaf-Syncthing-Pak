@@ -77,7 +77,11 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 	var last syncthingconfig.GameCheckStatus
 	haveLast := false
 	for {
-		checkContext, cancel := context.WithTimeout(ctx, time.Duration(ackMS)*time.Millisecond)
+		readTimeout := time.Duration(ackMS) * time.Millisecond
+		if haveLast && readTimeout < 2*time.Second {
+			readTimeout = 2 * time.Second
+		}
+		checkContext, cancel := context.WithTimeout(ctx, readTimeout)
 		current, err := upstream.ReadGameCheckStatus(checkContext, folders, selfDeviceID)
 		cancel()
 		if err != nil {
@@ -87,24 +91,27 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 			if logf != nil {
 				logf("check-before-stop needs attention: %v", err)
 			}
-			_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
-			return
-		}
-		if ctx.Err() != nil {
-			return
-		}
-		if current.Current {
-			_ = lifecycle.SendStop(event.LaunchID)
-			return
-		}
-		if !haveLast || current.PendingItems != last.PendingItems || current.PendingBytes != last.PendingBytes {
-			if err := lifecycle.SendWaiting(event.LaunchID, current.PendingItems, current.PendingBytes); err != nil {
+			if !haveLast {
+				_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
 				return
 			}
-			last = current
-			haveLast = true
+		} else {
+			if ctx.Err() != nil {
+				return
+			}
+			if current.Current {
+				_ = lifecycle.SendStop(event.LaunchID)
+				return
+			}
+			if !haveLast || current.PendingItems != last.PendingItems || current.PendingBytes != last.PendingBytes {
+				if err := lifecycle.SendWaiting(event.LaunchID, current.PendingItems, current.PendingBytes); err != nil {
+					return
+				}
+				last = current
+				haveLast = true
+			}
 		}
-		timer := time.NewTimer(100 * time.Millisecond)
+		timer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

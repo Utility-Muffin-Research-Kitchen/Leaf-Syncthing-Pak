@@ -32,6 +32,13 @@ It reports current only when local need is zero and every selected peer is
 configured, connected, unpaused, valid, and has zero remote need. Jawaka offers
 Wait for sync, Play anyway, and Cancel. Every proceed path still runs and
 verifies the existing supervisor stop before an emulator writer can start.
+The first result retains the 250 ms acknowledgement budget. After pending work
+has been reported, bounded follow-up reads may take two seconds and a transient
+read failure retains the last known pending result and retries within Jawaka's
+existing 15-second Wait deadline. Progress is refreshed at 500 ms rather than
+logging byte changes ten times per second. An initial unreadable status still
+fails closed immediately, and persistent trouble still expires into the same
+safe Play-anyway-or-Cancel decision.
 
 Card mountpoints are treated as runtime observations. At startup, an upstream
 folder whose stored path no longer matches its bound card is already paused by
@@ -50,7 +57,7 @@ The following passed after the implementation and mount-repair changes:
 | --- | --- | --- |
 | Leaf-Syncthing-Pak | `make test` | Pass: all Go packages and C UI-control fixtures/client |
 | Leaf-Syncthing-Pak | `go vet ./...` | Pass |
-| Leaf-Syncthing-Pak | `go test -race ./internal/controller ./internal/life1 ./internal/syncthing` | Pass |
+| Leaf-Syncthing-Pak | `go test -race ./internal/controller` | Pass after the physical-device follow-up fixes |
 | Jawaka | `make life1-test jawakad jawaka-launcher` | Pass; only pre-existing third-party miniz prototype warnings |
 | Jawaka | `make life1-game-check-ipc-smoke` | Pass: current, bounded wait, Play anyway, Cancel, expiry, timeout, and malformed reply |
 | Jawaka | Existing LIFE-1 game/fallback/override/recovery smoke suites | Pass |
@@ -61,17 +68,22 @@ and refuse missing-marker and duplicate-card-ID cases without calling the
 upstream mutation API. The API test requires an exact paused path and exact
 same-card versioning response after the PATCH.
 
-The final development package was reproducible across two assemblies:
+The pre-qualification development package was reproducible across two
+assemblies:
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
 | Installed `Syncthing.pak` tree | 33,600,072 | — |
 | `Syncthing.mlp1.pak.zip` | — | `f4cd8e8d619becafc1b9320da9db1478ccc8c8d48ff66051fbe62a643c33e9f9` |
-| ARM64 `leaf-syncthing` | — | `f81881b9e0d871e60f893632d0569a67da65cf02b47c3e6f82c55992458dc273` |
+| ARM64 `leaf-syncthing` in that package | — | `f81881b9e0d871e60f893632d0569a67da65cf02b47c3e6f82c55992458dc273` |
 
-The staged ARM64 Jawaka daemon and launcher hashes also matched their host
-builds exactly. The package remained an unstamped `0.0.0-b4c` development
-artifact; B5 still owns release version and compatibility-floor stamping.
+After the focused physical fixes, the rebuilt ARM64 controller hash was
+`808bd7effa4513aef24613064afac64c42d6c8a150bb68ddabab86b1de373abe` and
+the rebuilt Jawaka daemon hash was
+`7f43415934988df28259f0d131afa606ecd3c55c0c3e359e46693b2131fe9e01`.
+Each installed device file matched its host build exactly. The package remains
+an unstamped `0.0.0-b4c` development artifact; B5 still owns the final package
+rebuild, release version, and compatibility-floor stamping.
 
 ## Actual two-card reboot evidence
 
@@ -99,13 +111,50 @@ version stores remained unchanged. The post-reboot Jawaka log also confirmed a
 live subscription with `check_before_stop=true`, `ack_ms=250`, and
 `wait_ms=15000`.
 
+## Physical check-before-stop evidence
+
+The real MLP1, real RetroArch writer, and standard Syncthing v2.1.2 VPS peer
+qualified every user choice with active inbound data:
+
+- **Cancel:** with one 128 MiB Saves item pending, Cancel cleared the
+  known-not-started launch, left the Syncthing service running, started no
+  RetroArch process, and allowed the transfer to continue to current.
+- **Wait expiry:** a separate 128 MiB transfer used the full 15-second budget
+  and returned Needs attention with 12,701,696 bytes still pending. No writer
+  started. Choosing Play anyway from that result still verified the service
+  stopped before RetroArch.
+- **Multiple peers:** the VPS and a temporary unmodified upstream Syncthing
+  peer were both explicitly shared with `ra-saves`. A 16 MiB source item
+  appeared as 33,554,432 aggregate pending bytes, reached all peers current in
+  10,255 ms, and exposed the controller follow-up timing and deferred-writer
+  cleanup bugs fixed in this checkpoint.
+- **Successful Wait:** with the VPS sender temporarily capped to 4 MiB/s, one
+  32 MiB inbound item was shown immediately, became current in 10,023 ms, and
+  reached supervisor-verified stop 9,998 ms after Wait was selected. Only then
+  did RetroArch start, with the complete Syncthing service group absent.
+- **Direct Play anyway:** with another 32 MiB item pending, Play anyway
+  cancelled the freshness check, verified the service stopped, and only then
+  started RetroArch. On game exit, `game.finish` cleared the durable launch
+  record, Syncthing returned subscribed, and the interrupted transfer reached
+  current.
+
+The final Wait run deliberately reproduced a two-second Syncthing status stall
+near file finalization. The controller retained its last truthful pending
+result, retried, observed current, and stayed inside the 15-second user budget.
+Jawaka's deferred writer path now records the writer start, so the post-game
+barrier clears `active-game.json` and releases the lifecycle stop instead of
+leaving synchronization disabled.
+
+Qualification cleanup restored the VPS bandwidth options to their original
+unlimited values, removed only the exact test live/version files on both peers,
+removed the temporary ROM and its library row, and left both managed folders
+idle/current. Leaf reported zero retained version bytes, no active game, one
+connected direct VPS peer, and no issues.
+
 ## Remaining qualification
 
 - Run the complete PC-first, Leaf-first, later-peer, Android/non-Leaf handheld,
   and second-Leaf journeys with real clients and transfer data.
-- Exercise Wait / Play anyway / Cancel on the physical MLP1 during an active
-  inbound transfer and directly prove service-group absence before its real
-  emulator writer starts.
 - Finish the single guided first-run screen journey and documentation handoff.
 - Stamp and verify only the eventual B5 release artifacts; this checkpoint
   authorizes no tag, catalog mutation, or production release.

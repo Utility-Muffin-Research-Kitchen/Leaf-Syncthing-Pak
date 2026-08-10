@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,6 +105,73 @@ func TestRunGameCheckSendsWaitingThenStop(t *testing.T) {
 	}
 	if launchID := <-stopped; launchID != "launch" {
 		t.Fatalf("stop launch id = %s", launchID)
+	}
+}
+
+func TestRunGameCheckAllowsSlowerFollowupAfterInitialWaiting(t *testing.T) {
+	stopped := false
+	rejected := false
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(string, string) error {
+			rejected = true
+			return nil
+		},
+	}
+	checks := 0
+	upstream := gameCheckFunc(func(ctx context.Context, _ []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		if checks == 1 {
+			return syncthingconfig.GameCheckStatus{PendingItems: 1, PendingBytes: 4096}, nil
+		}
+		select {
+		case <-time.After(300 * time.Millisecond):
+			return syncthingconfig.GameCheckStatus{Current: true}, nil
+		case <-ctx.Done():
+			return syncthingconfig.GameCheckStatus{}, ctx.Err()
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, 50, nil)
+	if !stopped || rejected {
+		t.Fatalf("stopped = %t, rejected = %t", stopped, rejected)
+	}
+}
+
+func TestRunGameCheckRetriesTransientFollowupFailure(t *testing.T) {
+	stopped := false
+	rejected := false
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(string, string) error {
+			rejected = true
+			return nil
+		},
+	}
+	checks := 0
+	upstream := gameCheckFunc(func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		switch checks {
+		case 1:
+			return syncthingconfig.GameCheckStatus{PendingItems: 1, PendingBytes: 4096}, nil
+		case 2:
+			return syncthingconfig.GameCheckStatus{}, errors.New("temporary status failure")
+		default:
+			return syncthingconfig.GameCheckStatus{Current: true}, nil
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, 250, nil)
+	if !stopped || rejected {
+		t.Fatalf("stopped = %t, rejected = %t", stopped, rejected)
 	}
 }
 
