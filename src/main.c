@@ -344,10 +344,17 @@ static int ls_render_qr(const char *value, uint8_t *temporary, uint8_t *code) {
 static void ls_show_qr_value(const char *title, const char *value) {
     uint8_t temporary[qrcodegen_BUFFER_LEN_FOR_VERSION(LS_QR_MAX_VERSION)];
     uint8_t code[qrcodegen_BUFFER_LEN_FOR_VERSION(LS_QR_MAX_VERSION)];
+    char split_device_id[64];
+    const char *display_value = value;
     cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"}};
     if (!ls_render_qr(value, temporary, code)) {
         ls_message("This value is too large to encode as QR.");
         return;
+    }
+    if (strlen(value) == 63 && value[31] == '-') {
+        memcpy(split_device_id, value, sizeof(split_device_id));
+        split_device_id[31] = '\n';
+        display_value = split_device_id;
     }
     for (;;) {
         cat_input_event event;
@@ -369,7 +376,7 @@ static void ls_show_qr_value(const char *title, const char *value) {
         if (!theme || !small) return;
         cat_draw_background();
         cat_draw_screen_title(title, NULL);
-        cat_draw_text_wrapped(small, value, margin, content.y + margin,
+        cat_draw_text_wrapped(small, display_value, margin, content.y + margin,
                               screen_width - margin * 2, theme->text, CAT_ALIGN_CENTER);
         cat_draw_rect(qr_x, qr_y, qr_size, qr_size, (cat_draw_color){255, 255, 255, 255});
         for (int y = 0; y < size; y++) {
