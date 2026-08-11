@@ -65,10 +65,18 @@ int main(void) {
     round_trip("gateway-open-response.json", "\"pairing\":true");
     round_trip("unsupported-op-response.json", "\"code\":\"unsupported-op\"");
     round_trip("folder-onboard-plan-request.json", "\"op\":\"folder.onboard.plan\"");
+    round_trip("folder-offer-plan-request.json", "\"op\":\"folder.offer.plan\"");
+    round_trip("folder-offer-ignore-request.json", "\"op\":\"folder.offer.ignore\"");
+    round_trip("folder-offer-restore-request.json", "\"op\":\"folder.offer.restore\"");
     round_trip("folder-onboard-create-request.json", "\"manual_edit_warning_acknowledged\":true");
     round_trip("folder-first-sync-prepare-request.json", "\"snapshot_limit_acknowledged\":true");
     round_trip("folder-first-sync-start-request.json", "\"hub_versioning_acknowledged\":true");
     round_trip("folder-type-set-request.json", "\"op\":\"folder.type.set\"");
-    puts("PASS ui-control-v1 C fixture round trip (14 fixtures)");
+    round_trip("folder-share-request.json", "\"op\":\"folder.share\"");
+    round_trip("folder-unshare-request.json", "\"op\":\"folder.unshare\"");
+    round_trip("device-remove-request.json", "\"op\":\"device.remove\"");
+    round_trip("folder-stop-request.json", "\"op\":\"folder.stop\"");
+    round_trip("storage-cleanup-request.json", "\"op\":\"storage.cleanup\"");
+    puts("PASS ui-control-v1 C fixture round trip (22 fixtures)");
     return 0;
 }

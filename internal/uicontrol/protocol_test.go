@@ -64,8 +64,37 @@ func TestFrozenFixturesRoundTrip(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 14 {
-		t.Fatalf("checked %d fixtures, want 14", checked)
+	if checked != 22 {
+		t.Fatalf("checked %d fixtures, want 22", checked)
+	}
+}
+
+func TestStorageCleanupRequiresExactConfirmedInventoryRow(t *testing.T) {
+	var gotCard, gotCategory, gotKind, gotName string
+	var gotBytes int64
+	operations := Operations{
+		Status: fixtureStatus,
+		CleanupStorage: func(card, category, kind, name string, bytes int64) (Status, *ProtocolError) {
+			gotCard, gotCategory, gotKind, gotName, gotBytes = card, category, kind, name, bytes
+			return fixtureStatus(), nil
+		},
+	}
+	request := `{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"first-sync-20260809T123456Z-deadbeef","bytes":4096,"confirmed":true}}`
+	response := operations.Handle([]byte(request))
+	if !response.OK || gotCard != "ccddeeff" || gotCategory != "snapshot" || gotKind != "saves" ||
+		gotName != "first-sync-20260809T123456Z-deadbeef" || gotBytes != 4096 {
+		t.Fatalf("storage cleanup = %+v, got %q %q %q %q %d", response, gotCard, gotCategory, gotKind, gotName, gotBytes)
+	}
+	for _, unsafe := range []string{
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":4096,"confirmed":false}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":-1,"confirmed":true}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"live","kind":"saves","name":"snapshot","bytes":4096,"confirmed":true}}`,
+		`{"v":1,"id":"cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"snapshot","bytes":4096,"confirmed":true,"extra":true}}`,
+	} {
+		response = operations.Handle([]byte(unsafe))
+		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+			t.Fatalf("unsafe storage cleanup accepted: %s = %+v", unsafe, response)
+		}
 	}
 }
 
@@ -242,6 +271,10 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 			operation, id, name = gotOperation, gotID, gotName
 			return fixtureStatus(), nil
 		},
+		FolderMembership: func(gotOperation, gotID, gotDeviceID string) (Status, *ProtocolError) {
+			operation, id, name = gotOperation, gotID, gotDeviceID
+			return fixtureStatus(), nil
+		},
 		DeviceAction: func(gotOperation, gotID, gotName string) (Status, *ProtocolError) {
 			operation, id, name = gotOperation, gotID, gotName
 			return fixtureStatus(), nil
@@ -255,14 +288,31 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 	if !response.OK || operation != OperationFolderInspect || id != "leaf-saves-0011223344556677" {
 		t.Fatalf("folder inspect = %+v, %q %q", response, operation, id)
 	}
+	response = operations.Handle([]byte(`{"v":1,"id":"stop","op":"folder.stop","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true}}`))
+	if !response.OK || operation != OperationFolderStop || id != "leaf-saves-0011223344556677" {
+		t.Fatalf("folder stop = %+v, %q %q", response, operation, id)
+	}
+	peerID := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
+	response = operations.Handle([]byte(`{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"` + peerID + `","confirmed":true}}`))
+	if !response.OK || operation != OperationFolderShare || id != "leaf-saves-0011223344556677" || name != peerID {
+		t.Fatalf("folder share = %+v, %q %q %q", response, operation, id, name)
+	}
 	response = operations.Handle([]byte(`{"v":1,"id":"device","op":"device.add","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}`))
 	if !response.OK || operation != OperationDeviceAdd || name != "Laptop" {
 		t.Fatalf("device add = %+v, %q %q", response, operation, name)
 	}
+	response = operations.Handle([]byte(`{"v":1,"id":"device","op":"device.remove","args":{"device_id":"` + peerID + `","confirmed":true}}`))
+	if !response.OK || operation != OperationDeviceRemove || id != peerID || name != "" {
+		t.Fatalf("device remove = %+v, %q %q %q", response, operation, id, name)
+	}
 	for _, request := range []string{
 		`{"v":1,"id":"folder","op":"folder.pause","args":{"folder_id":"../bad"}}`,
 		`{"v":1,"id":"folder","op":"folder.rename","args":{"folder_id":"valid","label":"bad\nname"}}`,
+		`{"v":1,"id":"folder","op":"folder.unshare","args":{"folder_id":"valid","device_id":"peer","confirmed":false}}`,
+		`{"v":1,"id":"folder","op":"folder.share","args":{"folder_id":"valid","device_id":"peer","confirmed":true,"extra":true}}`,
+		`{"v":1,"id":"folder","op":"folder.stop","args":{"folder_id":"valid","confirmed":false}}`,
 		`{"v":1,"id":"device","op":"device.add","args":{"device_id":"id","name":"peer","extra":true}}`,
+		`{"v":1,"id":"device","op":"device.remove","args":{"device_id":"peer","confirmed":false}}`,
 	} {
 		response = operations.Handle([]byte(request))
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
@@ -273,9 +323,13 @@ func TestFolderAndDeviceOperationsAreStrict(t *testing.T) {
 
 func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t *testing.T) {
 	called := ""
+	selectedPeer := "IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"
 	operations := Operations{
 		Status: fixtureStatus,
-		PlanFolder: func(sourceID, kind, folderType string) (Status, *ProtocolError) {
+		PlanFolder: func(sourceID, kind, folderType string, deviceIDs []string) (Status, *ProtocolError) {
+			if len(deviceIDs) != 1 || deviceIDs[0] != selectedPeer {
+				t.Fatalf("onboarding selected peers = %v", deviceIDs)
+			}
 			called = sourceID + ":" + kind + ":" + folderType
 			status := fixtureStatus()
 			status.Onboarding = &OnboardingStatus{
@@ -284,6 +338,19 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 				FolderID: "leaf-" + kind + "-0011223344556677", Label: "Leaf Saves", Path: "/card/Saves",
 				FileCount: 2, DirectoryCount: 1, ContentBytes: 10, AvailableBytes: 100,
 				SnapshotPossible: true, PeerCount: 1, ExpiresAt: "2026-08-09T12:05:00Z",
+			}
+			return status, nil
+		},
+		PlanFolderOffer: func(folderID, deviceID, sourceID, kind, folderType string) (Status, *ProtocolError) {
+			called = folderID + ":" + sourceID + ":" + kind + ":" + folderType
+			status := fixtureStatus()
+			status.Onboarding = &OnboardingStatus{
+				PlanID: "00112233445566778899aabbccddeeff", SourceID: sourceID,
+				CardID: "ffeeddccbbaa99887766554433221100", Kind: kind, FolderType: folderType,
+				FolderID: folderID, Label: "Retro Saves", Path: "/card/Saves",
+				FileCount: 2, DirectoryCount: 1, ContentBytes: 10, AvailableBytes: 100,
+				SnapshotPossible: true, PeerCount: 1, JoinExisting: true, OfferDeviceID: deviceID,
+				ExpiresAt: "2026-08-09T12:05:00Z",
 			}
 			return status, nil
 		},
@@ -310,9 +377,15 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 			return fixtureStatus(), nil
 		},
 	}
-	response := operations.Handle([]byte(`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
+	response := operations.Handle([]byte(`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["` + selectedPeer + `"]}}`))
 	if !response.OK || called != "primary:saves:sendreceive" || response.Result == nil || response.Result.Onboarding == nil {
 		t.Fatalf("onboarding plan = %+v, called=%q", response, called)
+	}
+	offerDeviceID := selectedPeer
+	response = operations.Handle([]byte(`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"` + offerDeviceID + `","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`))
+	if !response.OK || called != "retro-saves:primary:saves:sendreceive" || response.Result == nil ||
+		response.Result.Onboarding == nil || !response.Result.Onboarding.JoinExisting || response.Result.Onboarding.OfferDeviceID != offerDeviceID {
+		t.Fatalf("folder offer plan = %+v, called=%q", response, called)
 	}
 	response = operations.Handle([]byte(`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":true}}`))
 	if !response.OK || called != "00112233445566778899aabbccddeeff" {
@@ -332,7 +405,10 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 	}
 
 	for _, request := range []string{
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":[]}}`,
+		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"roms","folder_type":"sendreceive"}}`,
+		`{"v":1,"id":"offer","op":"folder.offer.plan","args":{"folder_id":"../bad","device_id":"peer","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}`,
 		`{"v":1,"id":"create","op":"folder.onboard.create","args":{"plan_id":"00112233445566778899aabbccddeeff","confirmed":true,"states_warning_acknowledged":false,"manual_edit_warning_acknowledged":false}}`,
 		`{"v":1,"id":"prepare","op":"folder.first-sync.prepare","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"snapshot_limit_acknowledged":false}}`,
 		`{"v":1,"id":"start","op":"folder.first-sync.start","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true,"hub_versioning_acknowledged":false}}`,
@@ -342,6 +418,27 @@ func TestFolderOnboardingAndFirstSyncOperationsRequireExplicitAcknowledgments(t 
 		if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
 			t.Fatalf("unsafe B3 action accepted: %s = %+v", request, response)
 		}
+	}
+}
+
+func TestFolderOfferActionsRequireConfirmation(t *testing.T) {
+	called := ""
+	operations := Operations{
+		Status: fixtureStatus,
+		FolderOfferAction: func(operation, folderID, deviceID string) (Status, *ProtocolError) {
+			called = operation + ":" + folderID + ":" + deviceID
+			return fixtureStatus(), nil
+		},
+	}
+	for _, operation := range []string{OperationFolderOfferIgnore, OperationFolderOfferRestore} {
+		response := operations.Handle([]byte(`{"v":1,"id":"offer","op":"` + operation + `","args":{"folder_id":"retro-saves","device_id":"peer","confirmed":true}}`))
+		if !response.OK || called != operation+":retro-saves:peer" {
+			t.Fatalf("%s = %+v, called=%q", operation, response, called)
+		}
+	}
+	response := operations.Handle([]byte(`{"v":1,"id":"offer","op":"folder.offer.ignore","args":{"folder_id":"retro-saves","device_id":"peer","confirmed":false}}`))
+	if response.OK || response.Error == nil || response.Error.Code != "bad-arguments" {
+		t.Fatalf("unconfirmed ignore = %+v", response)
 	}
 }
 

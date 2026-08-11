@@ -8,7 +8,7 @@ MLP1_TOOLCHAIN_IMAGE ?= ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain:l
 MLP1_UI := build/mlp1/bin/leaf-syncthing-ui
 MLP1_FLOOR_UI := build/mlp1/bin/leaf-syncthing-floor
 
-.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 b4b-fixture b4b-local-smoke b4b-device-floor-smoke b4b-device-pre-gating-smoke b4b-device-transition-smoke test test-ui-control-c test-ui-client-c test-version-gate clean
+.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 b4b-fixture b4b-local-smoke b4b-device-floor-smoke b4b-device-pre-gating-smoke b4b-device-transition-smoke test test-ui-control-c test-ui-client-c test-service-view-c test-version-gate clean
 
 verify-upstream:
 	$(PYTHON) scripts/verify_upstream.py \
@@ -73,6 +73,7 @@ test:
 	$(GO) test ./...
 	$(MAKE) test-ui-control-c
 	$(MAKE) test-ui-client-c
+	$(MAKE) test-service-view-c
 	$(MAKE) test-version-gate
 
 test-version-gate:
@@ -93,6 +94,14 @@ test-ui-client-c:
 		-o build/tests/ui-control-client tests/ui_control_client_test.c \
 		src/ui_control.c src/framed_socket.c "$(CATASTROPHE_DIR)/include/cjson/cJSON.c"
 	build/tests/ui-control-client
+
+test-service-view-c:
+	@mkdir -p build/tests
+	$(CC) -std=c11 -Wall -Wextra -Werror \
+		-Iinclude -I"$(CATASTROPHE_DIR)/include/cjson" \
+		-o build/tests/service-view tests/service_view_test.c \
+		src/ctl1.c src/framed_socket.c "$(CATASTROPHE_DIR)/include/cjson/cJSON.c"
+	build/tests/service-view
 
 clean:
 	rm -rf build workdir

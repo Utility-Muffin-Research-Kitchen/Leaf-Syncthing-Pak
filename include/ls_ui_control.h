@@ -10,6 +10,8 @@
 #define LS_UI_MAX_CAPABILITIES 32
 #define LS_UI_MAX_NETWORKS 32
 #define LS_UI_MAX_PEERS 32
+#define LS_UI_MAX_FOLDER_OFFERS 32
+#define LS_UI_MAX_FOLDER_DEVICES 33
 #define LS_UI_MAX_RESET_PATHS 64
 #define LS_UI_MAX_STORAGE_ROWS 128
 #define LS_UI_MAX_CONFLICTS 64
@@ -49,7 +51,15 @@ typedef struct {
     long long global_bytes;
     int local_items;
     int global_items;
+    long long need_bytes;
+    int need_items;
+    char remote_state[32];
+    char remote_peer[65];
+    long long remote_need_bytes;
+    int remote_need_items;
     int peer_count;
+    char device_ids[LS_UI_MAX_FOLDER_DEVICES][128];
+    int device_count;
     char last_sync[64];
     char versioning[64];
     char first_sync_state[32];
@@ -76,6 +86,18 @@ typedef struct {
 } ls_ui_peer;
 
 typedef struct {
+    char folder_id[65];
+    char label[97];
+    char device_id[128];
+    char device_id_suffix[16];
+    char device_name[65];
+    char offered_at[65];
+    bool receive_encrypted;
+    bool remote_encrypted;
+    bool ignored;
+} ls_ui_folder_offer;
+
+typedef struct {
     char card_suffix[16];
     char category[16];
     char kind[16];
@@ -99,6 +121,8 @@ typedef struct {
     bool snapshot_possible;
     int peer_count;
     bool states_warning;
+    bool join_existing;
+    char offer_device_id[128];
     char expires_at[65];
 } ls_ui_onboarding;
 
@@ -160,11 +184,26 @@ typedef struct {
     int folder_count;
     ls_ui_peer peers[LS_UI_MAX_PEERS];
     int peer_count;
+    ls_ui_folder_offer folder_offers[LS_UI_MAX_FOLDER_OFFERS];
+    int folder_offer_count;
     ls_ui_issue issues[LS_UI_MAX_ISSUES];
     int issue_count;
     char capabilities[LS_UI_MAX_CAPABILITIES][64];
     int capability_count;
 } ls_ui_status;
+
+typedef enum {
+    LS_UI_NEEDS_ATTENTION = 0,
+    LS_UI_SYNCING = 1,
+    LS_UI_UP_TO_DATE = 2,
+} ls_ui_top_state;
+
+typedef struct {
+    ls_ui_top_state state;
+    long long need_bytes;
+    int need_items;
+    char message[256];
+} ls_ui_status_summary;
 
 int ls_ui_status_get(const char *socket_path,
                      ls_ui_status *status,
@@ -197,6 +236,24 @@ int ls_ui_folder_onboard_plan(const char *socket_path,
                               const char *source_id,
                               const char *kind,
                               const char *folder_type,
+                              const char *const *device_ids,
+                              size_t device_count,
+                              ls_ui_status *status,
+                              char *error,
+                              size_t error_size);
+int ls_ui_folder_offer_plan(const char *socket_path,
+                            const char *folder_id,
+                            const char *device_id,
+                            const char *source_id,
+                            const char *kind,
+                            const char *folder_type,
+                            ls_ui_status *status,
+                            char *error,
+                            size_t error_size);
+int ls_ui_folder_offer_action(const char *socket_path,
+                              const char *folder_id,
+                              const char *device_id,
+                              bool ignored,
                               ls_ui_status *status,
                               char *error,
                               size_t error_size);
@@ -223,6 +280,13 @@ int ls_ui_folder_type_set(const char *socket_path,
                           ls_ui_status *status,
                           char *error,
                           size_t error_size);
+int ls_ui_folder_membership(const char *socket_path,
+                            const char *operation,
+                            const char *folder_id,
+                            const char *device_id,
+                            ls_ui_status *status,
+                            char *error,
+                            size_t error_size);
 int ls_ui_device_action(const char *socket_path,
                         const char *operation,
                         const char *device_id,
@@ -245,6 +309,11 @@ int ls_ui_diagnostics_export(const char *socket_path,
                              ls_ui_status *status,
                              char *error,
                              size_t error_size);
+int ls_ui_storage_cleanup(const char *socket_path,
+                          const ls_ui_storage_row *row,
+                          ls_ui_status *status,
+                          char *error,
+                          size_t error_size);
 int ls_ui_parse_response(const char *payload,
                          size_t payload_size,
                          const char *request_id,
@@ -252,5 +321,9 @@ int ls_ui_parse_response(const char *payload,
                          char *error,
                          size_t error_size);
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation);
+const char *ls_ui_top_state_label(ls_ui_top_state state);
+const char *ls_ui_folder_state_label(const ls_ui_folder *folder);
+const char *ls_ui_guided_progress_label(const ls_ui_status *status);
+int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *summary);
 
 #endif

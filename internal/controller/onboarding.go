@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +31,9 @@ type managedFolderUpstream interface {
 type b3FolderUpstream interface {
 	managedFolderUpstream
 	SetManagedFolderType(context.Context, syncthing.ConfiguredFolder) error
+	SetManagedFolderDevices(context.Context, syncthing.ConfiguredFolder) error
+	RelocateManagedFolder(context.Context, syncthing.ConfiguredFolder) error
+	RemoveManagedFolder(context.Context, string) error
 	SetFolderPaused(context.Context, string, bool) error
 	RescanFolder(context.Context, string) error
 }
@@ -51,6 +56,8 @@ type onboardingPlan struct {
 	SnapshotPossible bool
 	PeerCount        int
 	StatesWarning    bool
+	OfferDeviceID    string
+	Devices          []string
 	ExpiresAt        time.Time
 }
 
@@ -83,7 +90,26 @@ func newOnboardingManager(options onboardingOptions) *onboardingManager {
 	return &onboardingManager{options: options, plans: make(map[string]onboardingPlan)}
 }
 
-func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, folderType, selfDeviceID string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
+func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, folderType, selfDeviceID string, deviceIDs []string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
+	return manager.plan(ctx, sourceID, kind, folderType, "", "", "", selfDeviceID, deviceIDs, inventory, configured, upstream)
+}
+
+func (manager *onboardingManager) PlanOffer(ctx context.Context, sourceID, kind, folderType, folderID, label, offerDeviceID, selfDeviceID string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
+	if !syncthing.ValidFolderID(folderID) {
+		return onboardingPlan{}, errors.New("the offered network folder id is unsupported")
+	}
+	normalizedDeviceID, err := syncthing.NormalizeDeviceID(offerDeviceID)
+	if err != nil || normalizedDeviceID == selfDeviceID {
+		return onboardingPlan{}, errors.New("the offering device is invalid")
+	}
+	label = strings.TrimSpace(label)
+	if !validOnboardingLabel(label) {
+		label = "Leaf " + folderKindLabel(kind)
+	}
+	return manager.plan(ctx, sourceID, kind, folderType, folderID, label, normalizedDeviceID, selfDeviceID, []string{normalizedDeviceID}, inventory, configured, upstream)
+}
+
+func (manager *onboardingManager) plan(ctx context.Context, sourceID, kind, folderType, offeredFolderID, offeredLabel, offerDeviceID, selfDeviceID string, deviceIDs []string, inventory []cards.Card, configured []syncthing.ConfiguredFolder, upstream managedFolderUpstream) (onboardingPlan, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.expireLocked()
@@ -101,6 +127,16 @@ func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, fold
 	if err != nil {
 		return onboardingPlan{}, err
 	}
+	label := "Leaf " + folderKindLabel(kind)
+	if offeredFolderID != "" {
+		folderID = offeredFolderID
+		label = offeredLabel
+	}
+	for _, folder := range configured {
+		if folder.ID == folderID {
+			return onboardingPlan{}, errors.New("this network folder is already configured")
+		}
+	}
 	path := managedContentPath(card.Source, kind)
 	files, directories, contentBytes, err := inspectOnboardingRoot(path, markerName)
 	if err != nil {
@@ -110,7 +146,7 @@ func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, fold
 	if err != nil {
 		return onboardingPlan{}, err
 	}
-	devices, err := upstream.ConfiguredFolderDevices(ctx, selfDeviceID)
+	devices, err := selectedFolderDevices(ctx, selfDeviceID, deviceIDs, upstream)
 	if err != nil {
 		return onboardingPlan{}, err
 	}
@@ -120,12 +156,14 @@ func (manager *onboardingManager) Plan(ctx context.Context, sourceID, kind, fold
 	}
 	plan := onboardingPlan{
 		ID: hex.EncodeToString(random), SourceID: sourceID, CardID: card.Identity.ID,
-		Kind: kind, FolderType: folderType, FolderID: folderID, Label: "Leaf " + folderKindLabel(kind),
+		Kind: kind, FolderType: folderType, FolderID: folderID, Label: label,
 		Path: path, MarkerName: markerName,
 		VersioningPath: filepath.Join(card.Source.UserdataPath, leaf.AppStateName, "versions", kind),
 		FileCount:      files, DirectoryCount: directories, ContentBytes: contentBytes, AvailableBytes: available,
 		SnapshotPossible: snapshotFits(contentBytes, available), PeerCount: len(devices) - 1,
-		StatesWarning: kind == "states", ExpiresAt: manager.options.Now().Add(onboardingPlanLifetime),
+		StatesWarning: kind == "states", OfferDeviceID: offerDeviceID,
+		Devices:   append([]string(nil), devices...),
+		ExpiresAt: manager.options.Now().Add(onboardingPlanLifetime),
 	}
 	manager.plans[plan.ID] = plan
 	return plan, nil
@@ -153,7 +191,8 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 		return syncthing.ConfiguredFolder{}, err
 	}
 	folderID, markerName, err := cards.BindingNames(card.Identity.ID, plan.Kind)
-	if err != nil || folderID != plan.FolderID || markerName != plan.MarkerName ||
+	if err != nil || (plan.OfferDeviceID == "" && folderID != plan.FolderID) ||
+		(plan.OfferDeviceID != "" && !syncthing.ValidFolderID(plan.FolderID)) || markerName != plan.MarkerName ||
 		filepath.Clean(managedContentPath(card.Source, plan.Kind)) != filepath.Clean(plan.Path) {
 		return syncthing.ConfiguredFolder{}, errors.New("folder setup binding changed after review")
 	}
@@ -170,7 +209,10 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 			return syncthing.ConfiguredFolder{}, errors.New("insufficient free space for a same-card safety snapshot")
 		}
 	}
-	devices, err := upstream.ConfiguredFolderDevices(ctx, selfDeviceID)
+	if len(plan.Devices) < 2 {
+		return syncthing.ConfiguredFolder{}, errors.New("folder setup plan has no selected peers")
+	}
+	devices, err := selectedFolderDevices(ctx, selfDeviceID, plan.Devices[1:], upstream)
 	if err != nil {
 		return syncthing.ConfiguredFolder{}, err
 	}
@@ -186,10 +228,14 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 		folder.VersioningFSPath = plan.VersioningPath
 		folder.VersioningFSType = "basic"
 	}
-	if err := validateFirstSyncBinding(folder, card); err != nil {
+	binding, err := newFolderControlRecord(folder, card)
+	if err != nil {
 		return syncthing.ConfiguredFolder{}, err
 	}
-	if err := controls.Add(folder.ID); err != nil {
+	if err := validateFirstSyncBinding(folder, card, binding); err != nil {
+		return syncthing.ConfiguredFolder{}, err
+	}
+	if err := controls.BeginAdd(folder, card); err != nil {
 		return syncthing.ConfiguredFolder{}, err
 	}
 	if err := upstream.AddManagedFolder(ctx, folder); err != nil {
@@ -198,8 +244,48 @@ func (manager *onboardingManager) Create(ctx context.Context, planID, selfDevice
 		}
 		return syncthing.ConfiguredFolder{}, err
 	}
+	if err := controls.Activate(folder.ID); err != nil {
+		return syncthing.ConfiguredFolder{}, errors.New("the upstream folder was added but its durable binding is still pending recovery")
+	}
 	delete(manager.plans, plan.ID)
 	return folder, nil
+}
+
+func selectedFolderDevices(ctx context.Context, selfDeviceID string, selected []string, upstream managedFolderUpstream) ([]string, error) {
+	self, err := syncthing.NormalizeDeviceID(selfDeviceID)
+	if err != nil {
+		return nil, errors.New("the local Syncthing device identity is invalid")
+	}
+	if len(selected) == 0 || len(selected) > 32 {
+		return nil, errors.New("select at least one and at most 32 configured peers")
+	}
+	configured, err := upstream.ConfiguredFolderDevices(ctx, self)
+	if err != nil {
+		return nil, err
+	}
+	available := make(map[string]bool, len(configured))
+	for _, rawDeviceID := range configured {
+		deviceID, normalizeErr := syncthing.NormalizeDeviceID(rawDeviceID)
+		if normalizeErr != nil {
+			return nil, errors.New("the configured Syncthing device list is invalid")
+		}
+		available[deviceID] = true
+	}
+	if !available[self] {
+		return nil, errors.New("the configured Syncthing device list does not contain this device")
+	}
+	peers := make([]string, 0, len(selected))
+	seen := make(map[string]bool, len(selected))
+	for _, rawDeviceID := range selected {
+		deviceID, normalizeErr := syncthing.NormalizeDeviceID(rawDeviceID)
+		if normalizeErr != nil || deviceID == self || seen[deviceID] || !available[deviceID] {
+			return nil, errors.New("selected peers must be unique configured Syncthing devices")
+		}
+		seen[deviceID] = true
+		peers = append(peers, deviceID)
+	}
+	sort.Strings(peers)
+	return append([]string{self}, peers...), nil
 }
 
 func (manager *onboardingManager) expireLocked() {
@@ -239,20 +325,28 @@ func validateOnboardingSelection(card cards.Card, kind, folderType string, confi
 	if folderType != "sendonly" && folderType != "sendreceive" && folderType != "receiveonly" {
 		return errors.New("folder setup type is unsupported")
 	}
-	folderID, _, err := cards.BindingNames(card.Identity.ID, kind)
-	if err != nil {
-		return err
-	}
+	path := managedContentPath(card.Source, kind)
 	for _, folder := range configured {
-		if folder.ID == folderID {
+		if filepath.Clean(folder.Path) == filepath.Clean(path) {
 			return errors.New("this card already has a managed folder for the selected content")
 		}
 	}
-	path := managedContentPath(card.Source, kind)
 	if _, err := leaf.RelativeWithin(card.Source.Root, path); err != nil || filepath.Clean(path) == filepath.Clean(card.Source.Root) {
 		return errors.New("the selected PATH-2 content tree is not confined to the card")
 	}
 	return nil
+}
+
+func validOnboardingLabel(label string) bool {
+	if label == "" || len(label) > 96 {
+		return false
+	}
+	for _, character := range label {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func inspectOnboardingRoot(path, markerName string) (int, int, int64, error) {

@@ -11,63 +11,210 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/cards"
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/syncthing"
 )
 
 const folderControlStateName = "folder-control.json"
 
 type folderControlRecord struct {
-	Manual         bool   `json:"manual"`
-	FirstSync      bool   `json:"first_sync"`
-	FirstSyncEpoch uint64 `json:"first_sync_epoch"`
-	PendingRescan  bool   `json:"pending_rescan"`
+	CardID            string `json:"card_id"`
+	Kind              string `json:"kind"`
+	MarkerName        string `json:"marker_name"`
+	Manual            bool   `json:"manual"`
+	FirstSync         bool   `json:"first_sync"`
+	FirstSyncEpoch    uint64 `json:"first_sync_epoch"`
+	PendingRescan     bool   `json:"pending_rescan"`
+	PendingAdd        bool   `json:"pending_add,omitempty"`
+	PendingMembership string `json:"pending_membership,omitempty"`
+	PendingDeviceID   string `json:"pending_device_id,omitempty"`
+	PendingStop       bool   `json:"pending_stop,omitempty"`
 }
 
 type folderControlDocument struct {
-	Schema  int                            `json:"schema"`
-	Folders map[string]folderControlRecord `json:"folders"`
+	Schema               int                            `json:"schema"`
+	Folders              map[string]folderControlRecord `json:"folders"`
+	IgnoredOffers        []ignoredFolderOfferRecord     `json:"ignored_offers,omitempty"`
+	PendingDeviceRemoval string                         `json:"pending_device_removal,omitempty"`
+}
+
+type ignoredFolderOfferRecord struct {
+	FolderID string `json:"folder_id"`
+	DeviceID string `json:"device_id"`
 }
 
 type folderControlStore struct {
-	mu      sync.Mutex
-	path    string
-	records map[string]folderControlRecord
+	mu                   sync.Mutex
+	path                 string
+	records              map[string]folderControlRecord
+	ignoredOffers        map[string]ignoredFolderOfferRecord
+	pendingDeviceRemoval string
 }
 
-func newFolderControlStore(path string, folders []syncthing.ConfiguredFolder) (*folderControlStore, error) {
+func newFolderControlStore(path string, folders []syncthing.ConfiguredFolder, inventory []cards.Card) (*folderControlStore, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("folder control state requires an absolute path")
 	}
-	records, present, err := readFolderControlState(path)
+	records, ignoredOffers, pendingDeviceRemoval, schema, present, err := readFolderControlState(path)
 	if err != nil {
 		return nil, err
 	}
-	changed := !present
+	changed := !present || schema == 1
 	configured := make(map[string]bool, len(folders))
 	for _, folder := range folders {
 		configured[folder.ID] = true
-		if record, ok := records[folder.ID]; !ok {
-			records[folder.ID] = folderControlRecord{FirstSync: true, FirstSyncEpoch: 1}
+		record, ok := records[folder.ID]
+		if !ok {
+			record = folderControlRecord{FirstSync: true, FirstSyncEpoch: 1}
 			changed = true
 		} else if record.FirstSyncEpoch == 0 {
 			record.FirstSyncEpoch = 1
-			records[folder.ID] = record
 			changed = true
 		}
+		if !completeFolderBinding(record) {
+			binding, err := legacyFolderBinding(folder, inventory)
+			if err != nil {
+				return nil, err
+			}
+			record.CardID = binding.CardID
+			record.Kind = binding.Kind
+			record.MarkerName = binding.MarkerName
+			changed = true
+		}
+		records[folder.ID] = record
 	}
-	for folderID := range records {
-		if !configured[folderID] {
+	if schema == 1 {
+		for folderID := range records {
+			if configured[folderID] {
+				continue
+			}
 			delete(records, folderID)
 			changed = true
 		}
 	}
-	store := &folderControlStore{path: path, records: records}
+	if err := validateFolderControlRecords(records); err != nil {
+		return nil, err
+	}
+	store := &folderControlStore{
+		path: path, records: records, ignoredOffers: ignoredOffers,
+		pendingDeviceRemoval: pendingDeviceRemoval,
+	}
 	if changed {
 		if err := store.persistLocked(); err != nil {
 			return nil, err
 		}
 	}
 	return store, nil
+}
+
+func (store *folderControlStore) IgnoredOffers() map[string]bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	result := make(map[string]bool, len(store.ignoredOffers))
+	for key := range store.ignoredOffers {
+		result[key] = true
+	}
+	return result
+}
+
+func (store *folderControlStore) SetOfferIgnored(folderID, deviceID string, ignored bool) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil || !syncthing.ValidFolderID(folderID) {
+		return errors.New("folder offer identity is invalid")
+	}
+	key := folderOfferKey(folderID, deviceID)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	_, present := store.ignoredOffers[key]
+	if present == ignored {
+		return nil
+	}
+	if ignored {
+		if len(store.ignoredOffers) >= 32 {
+			return errors.New("ignored folder offer limit reached")
+		}
+		store.ignoredOffers[key] = ignoredFolderOfferRecord{FolderID: folderID, DeviceID: deviceID}
+	} else {
+		delete(store.ignoredOffers, key)
+	}
+	if err := store.persistLocked(); err != nil {
+		if ignored {
+			delete(store.ignoredOffers, key)
+		} else {
+			store.ignoredOffers[key] = ignoredFolderOfferRecord{FolderID: folderID, DeviceID: deviceID}
+		}
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) PendingDeviceRemoval() string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.pendingDeviceRemoval
+}
+
+func (store *folderControlStore) BeginDeviceRemoval(deviceID string) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil {
+		return errors.New("device removal identity is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.pendingDeviceRemoval != "" {
+		if store.pendingDeviceRemoval == deviceID {
+			return nil
+		}
+		return errors.New("another device removal is pending")
+	}
+	store.pendingDeviceRemoval = deviceID
+	if err := store.persistLocked(); err != nil {
+		store.pendingDeviceRemoval = ""
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) CompleteDeviceRemoval(deviceID string) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil {
+		return errors.New("device removal identity is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.pendingDeviceRemoval != deviceID {
+		return errors.New("device removal intent does not match")
+	}
+	removedOffers := make(map[string]ignoredFolderOfferRecord)
+	for key, offer := range store.ignoredOffers {
+		if offer.DeviceID == deviceID {
+			removedOffers[key] = offer
+			delete(store.ignoredOffers, key)
+		}
+	}
+	store.pendingDeviceRemoval = ""
+	if err := store.persistLocked(); err != nil {
+		store.pendingDeviceRemoval = deviceID
+		for key, offer := range removedOffers {
+			store.ignoredOffers[key] = offer
+		}
+		return err
+	}
+	return nil
+}
+
+func folderOfferKey(folderID, deviceID string) string {
+	return folderID + "\n" + deviceID
+}
+
+func (store *folderControlStore) BindingKinds() map[string]string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	result := make(map[string]string, len(store.records))
+	for folderID, record := range store.records {
+		result[folderID] = record.Kind
+	}
+	return result
 }
 
 func (store *folderControlStore) Snapshot() map[string]folderControlRecord {
@@ -135,21 +282,56 @@ func (store *folderControlStore) RequireFirstSync(folderID string) error {
 	return store.persistLocked()
 }
 
-func (store *folderControlStore) Add(folderID string) error {
-	if !stringsManagedFolderID(folderID) {
-		return errors.New("folder control state contains an invalid folder id")
+func (store *folderControlStore) Add(folder syncthing.ConfiguredFolder, card cards.Card) error {
+	return store.add(folder, card, false)
+}
+
+func (store *folderControlStore) BeginAdd(folder syncthing.ConfiguredFolder, card cards.Card) error {
+	return store.add(folder, card, true)
+}
+
+func (store *folderControlStore) add(folder syncthing.ConfiguredFolder, card cards.Card, pending bool) error {
+	record, err := newFolderControlRecord(folder, card)
+	if err != nil {
+		return err
 	}
+	record.PendingAdd = pending
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if _, ok := store.records[folderID]; ok {
+	if _, ok := store.records[folder.ID]; ok {
 		return errors.New("folder control state already contains this folder")
 	}
 	if len(store.records) >= 16 {
 		return errors.New("folder control state exceeds the managed-folder limit")
 	}
-	store.records[folderID] = folderControlRecord{FirstSync: true, FirstSyncEpoch: 1}
+	for _, existing := range store.records {
+		if existing.CardID == record.CardID && existing.Kind == record.Kind {
+			return errors.New("folder control state already binds this card and content kind")
+		}
+	}
+	store.records[folder.ID] = record
 	if err := store.persistLocked(); err != nil {
-		delete(store.records, folderID)
+		delete(store.records, folder.ID)
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) Activate(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok {
+		return errors.New("folder control state does not contain this folder")
+	}
+	if !record.PendingAdd {
+		return nil
+	}
+	record.PendingAdd = false
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingAdd = true
+		store.records[folderID] = record
 		return err
 	}
 	return nil
@@ -170,39 +352,127 @@ func (store *folderControlStore) Remove(folderID string) error {
 	return nil
 }
 
-func readFolderControlState(path string) (map[string]folderControlRecord, bool, error) {
+func (store *folderControlStore) BeginMembership(folderID, deviceID, operation string) error {
+	deviceID, err := syncthing.NormalizeDeviceID(deviceID)
+	if err != nil || (operation != "share" && operation != "unshare") {
+		return errors.New("folder membership intent is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingAdd {
+		return errors.New("folder control state cannot change membership for this folder")
+	}
+	if record.PendingMembership != "" {
+		if record.PendingMembership == operation && record.PendingDeviceID == deviceID {
+			return nil
+		}
+		return errors.New("another folder membership change is pending")
+	}
+	record.PendingMembership = operation
+	record.PendingDeviceID = deviceID
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingMembership = ""
+		record.PendingDeviceID = ""
+		store.records[folderID] = record
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) CompleteMembership(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingMembership == "" {
+		return errors.New("folder membership intent is absent")
+	}
+	original := record
+	record.PendingMembership = ""
+	record.PendingDeviceID = ""
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		store.records[folderID] = original
+		return err
+	}
+	return nil
+}
+
+func (store *folderControlStore) BeginStop(folderID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	record, ok := store.records[folderID]
+	if !ok || record.PendingAdd || record.PendingMembership != "" {
+		return errors.New("folder control state cannot stop this folder")
+	}
+	if record.PendingStop {
+		return nil
+	}
+	record.PendingStop = true
+	store.records[folderID] = record
+	if err := store.persistLocked(); err != nil {
+		record.PendingStop = false
+		store.records[folderID] = record
+		return err
+	}
+	return nil
+}
+
+func readFolderControlState(path string) (map[string]folderControlRecord, map[string]ignoredFolderOfferRecord, string, int, bool, error) {
 	records := make(map[string]folderControlRecord)
+	ignoredOffers := make(map[string]ignoredFolderOfferRecord)
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return records, false, nil
+		return records, ignoredOffers, "", 0, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, nil, "", 0, false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64*1024 {
-		return nil, false, errors.New("folder control state is unsafe")
+		return nil, nil, "", 0, false, errors.New("folder control state is unsafe")
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, "", 0, false, err
 	}
 	var document folderControlDocument
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&document); err != nil {
-		return nil, false, fmt.Errorf("decode folder control state: %w", err)
+		return nil, nil, "", 0, false, fmt.Errorf("decode folder control state: %w", err)
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || document.Schema != 1 ||
-		document.Folders == nil || len(document.Folders) > 16 {
-		return nil, false, errors.New("folder control state is unsupported")
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || (document.Schema != 1 && document.Schema != 2) ||
+		document.Folders == nil || len(document.Folders) > 16 || len(document.IgnoredOffers) > 32 {
+		return nil, nil, "", 0, false, errors.New("folder control state is unsupported")
 	}
 	for folderID, record := range document.Folders {
-		if !stringsManagedFolderID(folderID) {
-			return nil, false, errors.New("folder control state contains an invalid folder id")
+		if (document.Schema == 1 && !stringsManagedFolderID(folderID)) ||
+			(document.Schema == 2 && !syncthing.ValidFolderID(folderID)) {
+			return nil, nil, "", 0, false, errors.New("folder control state contains an invalid folder id")
 		}
 		records[folderID] = record
 	}
-	return records, true, nil
+	for _, offer := range document.IgnoredOffers {
+		deviceID, err := syncthing.NormalizeDeviceID(offer.DeviceID)
+		if err != nil || !syncthing.ValidFolderID(offer.FolderID) {
+			return nil, nil, "", 0, false, errors.New("folder control state contains an invalid ignored offer")
+		}
+		offer.DeviceID = deviceID
+		key := folderOfferKey(offer.FolderID, deviceID)
+		if ignoredOffers[key].FolderID != "" {
+			return nil, nil, "", 0, false, errors.New("folder control state contains a duplicate ignored offer")
+		}
+		ignoredOffers[key] = offer
+	}
+	pendingDeviceRemoval := ""
+	if document.PendingDeviceRemoval != "" {
+		pendingDeviceRemoval, err = syncthing.NormalizeDeviceID(document.PendingDeviceRemoval)
+		if err != nil {
+			return nil, nil, "", 0, false, errors.New("folder control state contains an invalid pending device removal")
+		}
+	}
+	return records, ignoredOffers, pendingDeviceRemoval, document.Schema, true, nil
 }
 
 func (store *folderControlStore) persistLocked() error {
@@ -215,7 +485,18 @@ func (store *folderControlStore) persistLocked() error {
 	for _, key := range keys {
 		ordered[key] = store.records[key]
 	}
-	payload, err := json.Marshal(folderControlDocument{Schema: 1, Folders: ordered})
+	ignoredOffers := make([]ignoredFolderOfferRecord, 0, len(store.ignoredOffers))
+	for _, offer := range store.ignoredOffers {
+		ignoredOffers = append(ignoredOffers, offer)
+	}
+	sort.Slice(ignoredOffers, func(i, j int) bool {
+		return folderOfferKey(ignoredOffers[i].FolderID, ignoredOffers[i].DeviceID) <
+			folderOfferKey(ignoredOffers[j].FolderID, ignoredOffers[j].DeviceID)
+	})
+	payload, err := json.Marshal(folderControlDocument{
+		Schema: 2, Folders: ordered, IgnoredOffers: ignoredOffers,
+		PendingDeviceRemoval: store.pendingDeviceRemoval,
+	})
 	if err != nil {
 		return err
 	}
@@ -253,6 +534,72 @@ func (store *folderControlStore) persistLocked() error {
 		return err
 	}
 	return syncStateFilesystem(filepath.Dir(store.path))
+}
+
+func newFolderControlRecord(folder syncthing.ConfiguredFolder, card cards.Card) (folderControlRecord, error) {
+	if !syncthing.ValidFolderID(folder.ID) {
+		return folderControlRecord{}, errors.New("folder control state contains an invalid folder id")
+	}
+	_, markerName, err := cards.BindingNames(card.Identity.ID, folder.Kind)
+	if err != nil || markerName != folder.MarkerName {
+		return folderControlRecord{}, errors.New("folder control state binding does not match its physical card")
+	}
+	return folderControlRecord{
+		CardID: card.Identity.ID, Kind: folder.Kind, MarkerName: markerName,
+		FirstSync: true, FirstSyncEpoch: 1,
+	}, nil
+}
+
+func legacyFolderBinding(folder syncthing.ConfiguredFolder, inventory []cards.Card) (folderControlRecord, error) {
+	var binding folderControlRecord
+	matches := 0
+	for _, card := range inventory {
+		folderID, markerName, err := cards.BindingNames(card.Identity.ID, folder.Kind)
+		if err == nil && folderID == folder.ID && markerName == folder.MarkerName {
+			binding.CardID = card.Identity.ID
+			binding.Kind = folder.Kind
+			binding.MarkerName = markerName
+			matches++
+		}
+	}
+	if matches != 1 {
+		return folderControlRecord{}, errors.New("folder control state cannot uniquely migrate its physical card binding")
+	}
+	return binding, nil
+}
+
+func completeFolderBinding(record folderControlRecord) bool {
+	return record.CardID != "" && record.Kind != "" && record.MarkerName != ""
+}
+
+func validateFolderControlRecords(records map[string]folderControlRecord) error {
+	localBindings := make(map[string]bool, len(records))
+	for folderID, record := range records {
+		if !syncthing.ValidFolderID(folderID) || !completeFolderBinding(record) {
+			return errors.New("folder control state contains an incomplete binding")
+		}
+		_, markerName, err := cards.BindingNames(record.CardID, record.Kind)
+		if err != nil || markerName != record.MarkerName {
+			return errors.New("folder control state contains an invalid physical binding")
+		}
+		if record.PendingAdd && (record.PendingMembership != "" || record.PendingStop) ||
+			record.PendingStop && record.PendingMembership != "" ||
+			(record.PendingMembership == "") != (record.PendingDeviceID == "") ||
+			(record.PendingMembership != "" && record.PendingMembership != "share" && record.PendingMembership != "unshare") {
+			return errors.New("folder control state contains an invalid pending mutation")
+		}
+		if record.PendingDeviceID != "" {
+			if _, err := syncthing.NormalizeDeviceID(record.PendingDeviceID); err != nil {
+				return errors.New("folder control state contains an invalid pending device")
+			}
+		}
+		localKey := record.CardID + ":" + record.Kind
+		if localBindings[localKey] {
+			return errors.New("folder control state contains duplicate local bindings")
+		}
+		localBindings[localKey] = true
+	}
+	return nil
 }
 
 func stringsManagedFolderID(value string) bool {

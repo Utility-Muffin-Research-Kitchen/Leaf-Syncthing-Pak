@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	maxPeerName   = 64
-	maxFolderName = 96
+	maxPeerName     = 64
+	maxFolderName   = 96
+	maxFolderOffers = 32
 )
 
 type UIFolderStatus struct {
@@ -24,6 +25,11 @@ type UIFolderStatus struct {
 	LocalItems   int
 	GlobalItems  int
 	NeedBytes    int64
+	NeedItems    int
+	RemoteState  string
+	RemotePeer   string
+	RemoteBytes  int64
+	RemoteItems  int
 	ErrorCount   int
 	PullErrors   int
 	LastActivity string
@@ -50,10 +56,21 @@ type UITransferStatus struct {
 	OutBytes    int64
 }
 
+type UIFolderOffer struct {
+	FolderID         string
+	Label            string
+	DeviceID         string
+	DeviceName       string
+	OfferedAt        string
+	ReceiveEncrypted bool
+	RemoteEncrypted  bool
+}
+
 type UIStatus struct {
-	Folders  map[string]UIFolderStatus
-	Peers    []UIPeerStatus
-	Transfer UITransferStatus
+	Folders      map[string]UIFolderStatus
+	Peers        []UIPeerStatus
+	FolderOffers []UIFolderOffer
+	Transfer     UITransferStatus
 }
 
 type uiDevice struct {
@@ -81,6 +98,7 @@ type uiDBStatus struct {
 	LocalBytes        int64  `json:"localBytes"`
 	GlobalBytes       int64  `json:"globalBytes"`
 	NeedBytes         int64  `json:"needBytes"`
+	NeedTotalItems    int    `json:"needTotalItems"`
 	LocalFiles        int    `json:"localFiles"`
 	LocalDirectories  int    `json:"localDirectories"`
 	LocalSymlinks     int    `json:"localSymlinks"`
@@ -92,6 +110,13 @@ type uiDBStatus struct {
 	StateChange       string `json:"stateChanged"`
 }
 
+type uiCompletion struct {
+	NeedBytes   int64  `json:"needBytes"`
+	NeedItems   int    `json:"needItems"`
+	NeedDeletes int    `json:"needDeletes"`
+	RemoteState string `json:"remoteState"`
+}
+
 type uiFolderStats map[string]struct {
 	LastFile struct {
 		At time.Time `json:"at"`
@@ -100,6 +125,15 @@ type uiFolderStats map[string]struct {
 
 type uiPendingDevice struct {
 	Name string `json:"name"`
+}
+
+type uiPendingFolder struct {
+	OfferedBy map[string]struct {
+		Time             string `json:"time"`
+		Label            string `json:"label"`
+		ReceiveEncrypted bool   `json:"receiveEncrypted"`
+		RemoteEncrypted  bool   `json:"remoteEncrypted"`
+	} `json:"offeredBy"`
 }
 
 // ReadUIStatus returns only bounded, display-safe data used by the C client.
@@ -118,9 +152,17 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 	if err := process.apiJSON(ctx, http.MethodGet, "/rest/cluster/pending/devices", nil, &pending); err != nil {
 		return UIStatus{}, err
 	}
+	var pendingFolders map[string]uiPendingFolder
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/cluster/pending/folders", nil, &pendingFolders); err != nil {
+		return UIStatus{}, err
+	}
 	var stats uiFolderStats
 	if err := process.apiJSON(ctx, http.MethodGet, "/rest/stats/folder", nil, &stats); err != nil {
 		return UIStatus{}, err
+	}
+	configuredDevices := make(map[string]uiDevice, len(devices))
+	for _, device := range devices {
+		configuredDevices[device.DeviceID] = device
 	}
 
 	for _, folder := range folders {
@@ -132,6 +174,7 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		row := UIFolderStatus{
 			ID: folder.ID, State: boundedState(upstream.State), LocalBytes: nonnegative(upstream.LocalBytes),
 			GlobalBytes: nonnegative(upstream.GlobalBytes), NeedBytes: nonnegative(upstream.NeedBytes),
+			NeedItems: boundedItemTotal(upstream.NeedTotalItems), RemoteState: "local-only",
 			LocalItems:  boundedItemTotal(upstream.LocalFiles, upstream.LocalDirectories, upstream.LocalSymlinks),
 			GlobalItems: boundedItemTotal(upstream.GlobalFiles, upstream.GlobalDirectories, upstream.GlobalSymlinks),
 			ErrorCount:  nonnegativeInt(upstream.Errors), PullErrors: nonnegativeInt(upstream.PullErrors),
@@ -140,6 +183,58 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 			row.LastActivity = entry.LastFile.At.UTC().Format(time.RFC3339)
 		} else if parsed, err := time.Parse(time.RFC3339Nano, upstream.StateChange); err == nil {
 			row.LastActivity = parsed.UTC().Format(time.RFC3339)
+		}
+		remoteCount := 0
+		attentionState, attentionPeer := "", ""
+		pendingPeer := ""
+		for _, deviceID := range folder.Devices {
+			if deviceID == selfDeviceID {
+				continue
+			}
+			remoteCount++
+			device, configured := configuredDevices[deviceID]
+			peerName := displayPeerName(device.Name, deviceID)
+			connection := connections.Connections[deviceID]
+			if !configured || !connection.Connected {
+				if attentionState == "" {
+					attentionState, attentionPeer = "offline", peerName
+				}
+				continue
+			}
+			if device.Paused || connection.Paused {
+				if attentionState == "" {
+					attentionState, attentionPeer = "paused", peerName
+				}
+				continue
+			}
+			var completion uiCompletion
+			completionPath := "/rest/db/completion?" + url.Values{
+				"device": []string{deviceID}, "folder": []string{folder.ID},
+			}.Encode()
+			if err := process.apiJSON(ctx, http.MethodGet, completionPath, nil, &completion); err != nil {
+				return UIStatus{}, err
+			}
+			remoteState := boundedRemoteState(completion.RemoteState)
+			if remoteState != "valid" {
+				if attentionState == "" {
+					attentionState, attentionPeer = remoteState, peerName
+				}
+				continue
+			}
+			needBytes := nonnegative(completion.NeedBytes)
+			needItems := boundedItemTotal(completion.NeedItems, completion.NeedDeletes)
+			row.RemoteBytes = boundedByteTotal(row.RemoteBytes, needBytes)
+			row.RemoteItems = boundedItemTotal(row.RemoteItems, needItems)
+			if pendingPeer == "" && (needBytes > 0 || needItems > 0) {
+				pendingPeer = peerName
+			}
+		}
+		if attentionState != "" {
+			row.RemoteState, row.RemotePeer = attentionState, attentionPeer
+		} else if row.RemoteBytes > 0 || row.RemoteItems > 0 {
+			row.RemoteState, row.RemotePeer = "syncing", pendingPeer
+		} else if remoteCount > 0 {
+			row.RemoteState = "current"
 		}
 		status.Folders[folder.ID] = row
 		status.Transfer.LocalBytes += row.LocalBytes
@@ -187,7 +282,79 @@ func (process *Process) ReadUIStatus(ctx context.Context, folders []ConfiguredFo
 		}
 		return status.Peers[left].Name < status.Peers[right].Name
 	})
+	peerNames := make(map[string]string, len(status.Peers))
+	for _, peer := range status.Peers {
+		peerNames[peer.ID] = peer.Name
+	}
+	folderIDs := make([]string, 0, len(pendingFolders))
+	for folderID := range pendingFolders {
+		folderIDs = append(folderIDs, folderID)
+	}
+	sort.Strings(folderIDs)
+	for _, folderID := range folderIDs {
+		if !ValidFolderID(folderID) {
+			continue
+		}
+		deviceIDs := make([]string, 0, len(pendingFolders[folderID].OfferedBy))
+		for deviceID := range pendingFolders[folderID].OfferedBy {
+			deviceIDs = append(deviceIDs, deviceID)
+		}
+		sort.Strings(deviceIDs)
+		for _, deviceID := range deviceIDs {
+			normalized, err := NormalizeDeviceID(deviceID)
+			if err != nil || normalized == selfDeviceID || len(status.FolderOffers) >= maxFolderOffers {
+				continue
+			}
+			offer := pendingFolders[folderID].OfferedBy[deviceID]
+			status.FolderOffers = append(status.FolderOffers, UIFolderOffer{
+				FolderID: folderID, Label: displayFolderLabel(offer.Label, folderID),
+				DeviceID: normalized, DeviceName: displayPeerName(peerNames[normalized], normalized),
+				OfferedAt: boundedOfferTime(offer.Time), ReceiveEncrypted: offer.ReceiveEncrypted,
+				RemoteEncrypted: offer.RemoteEncrypted,
+			})
+		}
+	}
 	return status, nil
+}
+
+func boundedRemoteState(value string) string {
+	switch value {
+	case "valid":
+		return value
+	case "paused":
+		return value
+	case "notSharing":
+		return "not-sharing"
+	default:
+		return "unknown"
+	}
+}
+
+func boundedByteTotal(left, right int64) int64 {
+	const maximum = int64(^uint64(0) >> 1)
+	if right < 0 {
+		return left
+	}
+	if left > maximum-right {
+		return maximum
+	}
+	return left + right
+}
+
+func displayFolderLabel(label, folderID string) string {
+	label = strings.TrimSpace(label)
+	if validDisplayName(label, maxFolderName) {
+		return label
+	}
+	return "Shared folder " + folderID
+}
+
+func boundedOfferTime(value string) string {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 func boundedItemTotal(values ...int) int {
@@ -204,7 +371,7 @@ func boundedItemTotal(values ...int) int {
 }
 
 func (process *Process) SetFolderPaused(ctx context.Context, folderID string, paused bool) error {
-	if !managedFolderIDPattern.MatchString(folderID) {
+	if !ValidFolderID(folderID) {
 		return errors.New("invalid managed folder id")
 	}
 	path := "/rest/config/folders/" + url.PathEscape(folderID)
@@ -215,7 +382,7 @@ func (process *Process) SetFolderPaused(ctx context.Context, folderID string, pa
 }
 
 func (process *Process) RescanFolder(ctx context.Context, folderID string) error {
-	if !managedFolderIDPattern.MatchString(folderID) {
+	if !ValidFolderID(folderID) {
 		return errors.New("invalid managed folder id")
 	}
 	path := "/rest/db/scan?" + url.Values{"folder": []string{folderID}}.Encode()
@@ -227,7 +394,7 @@ func (process *Process) RescanFolder(ctx context.Context, folderID string) error
 
 func (process *Process) RenameFolder(ctx context.Context, folderID, label string) error {
 	label = strings.TrimSpace(label)
-	if !managedFolderIDPattern.MatchString(folderID) || !validDisplayName(label, maxFolderName) {
+	if !ValidFolderID(folderID) || !validDisplayName(label, maxFolderName) {
 		return errors.New("invalid managed folder label")
 	}
 	path := "/rest/config/folders/" + url.PathEscape(folderID)
@@ -270,6 +437,51 @@ func (process *Process) RenamePeer(ctx context.Context, rawDeviceID, name string
 		return errors.New("invalid peer name")
 	}
 	return process.patchDevice(ctx, deviceID, map[string]any{"name": name})
+}
+
+// RemovePeer is idempotent so a controller restart can safely complete a
+// durable removal intent. It verifies the exact configured device list before
+// and after the supported runtime-config deletion.
+func (process *Process) RemovePeer(ctx context.Context, rawDeviceID, rawSelfDeviceID string) error {
+	deviceID, err := NormalizeDeviceID(rawDeviceID)
+	if err != nil {
+		return err
+	}
+	selfDeviceID, err := NormalizeDeviceID(rawSelfDeviceID)
+	if err != nil || deviceID == selfDeviceID {
+		return errors.New("cannot remove the local Syncthing device")
+	}
+	present, err := process.configuredPeerPresent(ctx, deviceID)
+	if err != nil || !present {
+		return err
+	}
+	if err := process.apiJSON(ctx, http.MethodDelete, deviceConfigPath(deviceID), nil, nil); err != nil {
+		return fmt.Errorf("remove peer: %w", err)
+	}
+	present, err = process.configuredPeerPresent(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("verify removed peer: %w", err)
+	}
+	if present {
+		return errors.New("upstream peer remained configured after removal")
+	}
+	return nil
+}
+
+func (process *Process) configuredPeerPresent(ctx context.Context, deviceID string) (bool, error) {
+	var devices []uiDevice
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/config/devices", nil, &devices); err != nil {
+		return false, err
+	}
+	seen := make(map[string]bool, len(devices))
+	for _, device := range devices {
+		normalized, err := NormalizeDeviceID(device.DeviceID)
+		if err != nil || seen[normalized] {
+			return false, errors.New("configured device list is invalid or duplicated")
+		}
+		seen[normalized] = true
+	}
+	return seen[deviceID], nil
 }
 
 func NormalizeDeviceID(value string) (string, error) {

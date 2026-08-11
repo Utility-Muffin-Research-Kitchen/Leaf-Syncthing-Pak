@@ -12,7 +12,11 @@ import (
 	"strings"
 )
 
-const maxProxyJSON = 4 * 1024 * 1024
+const (
+	maxProxyJSON   = 4 * 1024 * 1024
+	maxProxyHTML   = 4 * 1024 * 1024
+	readOnlyBanner = `<div id="leaf-read-only-banner" role="status" aria-live="polite" style="position:sticky;top:0;z-index:2147483647;padding:10px 16px;background:#f6c344;color:#161616;font:600 16px sans-serif;text-align:center">Read-only Leaf status view. Make changes on the handheld.</div>`
+)
 
 func (manager *Manager) newProxy() http.Handler {
 	upstream, _ := url.Parse("http://syncthing-unix")
@@ -26,6 +30,7 @@ func (manager *Manager) newProxy() http.Handler {
 		request.Header.Del("Authorization")
 		request.Header.Del("X-API-Key")
 		request.Header.Del("Cookie")
+		request.Header.Del("Accept-Encoding")
 		request.Header.Del("Origin")
 		request.Header.Del("Referer")
 	}
@@ -53,6 +58,13 @@ func normalizeUpstreamResponse(response *http.Response) error {
 			}
 		}
 	}
+	if response.StatusCode == http.StatusOK && response.Request != nil &&
+		response.Request.Method == http.MethodGet && response.Request.URL.Path == "/" &&
+		response.Body != nil {
+		if err := addReadOnlyBanner(response); err != nil {
+			return err
+		}
+	}
 	if response.Request != nil && response.Request.URL.Path == "/rest/config" && response.Body != nil {
 		payload, err := io.ReadAll(io.LimitReader(response.Body, maxProxyJSON+1))
 		_ = response.Body.Close()
@@ -74,6 +86,35 @@ func normalizeUpstreamResponse(response *http.Response) error {
 		response.Header.Set("Content-Length", strconv.Itoa(len(payload)))
 		response.Header.Del("Content-Encoding")
 	}
+	return nil
+}
+
+func addReadOnlyBanner(response *http.Response) error {
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxProxyHTML+1))
+	_ = response.Body.Close()
+	if err != nil || len(payload) > maxProxyHTML {
+		return errors.New("upstream UI shell exceeds gateway limit")
+	}
+	if !bytes.Contains(payload, []byte(`id="leaf-read-only-banner"`)) {
+		lower := bytes.ToLower(payload)
+		body := bytes.Index(lower, []byte("<body"))
+		if body < 0 {
+			return errors.New("upstream UI shell has no body")
+		}
+		bodyEnd := bytes.IndexByte(lower[body:], '>')
+		if bodyEnd < 0 {
+			return errors.New("upstream UI shell has an invalid body")
+		}
+		bodyEnd += body + 1
+		decorated := make([]byte, 0, len(payload)+len(readOnlyBanner))
+		decorated = append(decorated, payload[:bodyEnd]...)
+		decorated = append(decorated, readOnlyBanner...)
+		payload = append(decorated, payload[bodyEnd:]...)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(payload))
+	response.ContentLength = int64(len(payload))
+	response.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+	response.Header.Del("Content-Encoding")
 	return nil
 }
 

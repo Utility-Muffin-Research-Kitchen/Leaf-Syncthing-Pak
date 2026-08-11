@@ -50,8 +50,8 @@ type Identity struct {
 	ID      string `json:"id"`
 }
 
-// BindingNames freezes v1's one-folder-per-(card,kind) identity and mandatory
-// non-default marker derivation.
+// BindingNames derives the default network ID and mandatory local marker for
+// one (card, kind) binding. Adopted network folders keep their existing ID.
 func BindingNames(cardID, kind string) (folderID, markerName string, err error) {
 	if !validIdentityID(cardID) {
 		return "", "", ErrInvalidIdentity

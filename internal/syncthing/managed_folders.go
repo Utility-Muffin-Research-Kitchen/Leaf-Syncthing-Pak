@@ -86,6 +86,9 @@ func (process *Process) ConfiguredFolderDevices(ctx context.Context, selfDeviceI
 // folder paused. The controller is the only caller and has already confined
 // the paths to an enrolled card; this layer independently bounds the request.
 func (process *Process) AddManagedFolder(ctx context.Context, folder ConfiguredFolder) error {
+	if len(folder.Devices) < 2 {
+		return errors.New("managed folder requires the local device and at least one peer")
+	}
 	request, err := managedFolderAPIRequest(folder)
 	if err != nil {
 		return err
@@ -114,15 +117,138 @@ func (process *Process) SetManagedFolderType(ctx context.Context, folder Configu
 	return nil
 }
 
+// RelocateManagedFolder changes only the local path and same-card versioning
+// path while keeping the folder paused. The controller calls this after it has
+// matched one enrolled physical card by card-id and validated that card's
+// custom marker at the new mountpoint.
+func (process *Process) RelocateManagedFolder(ctx context.Context, folder ConfiguredFolder) error {
+	request, err := managedFolderAPIRequest(folder)
+	if err != nil {
+		return err
+	}
+	path := "/rest/config/folders/" + url.PathEscape(folder.ID)
+	patch := map[string]any{"paused": true, "path": request.Path}
+	if request.Versioning != nil {
+		patch["versioning"] = request.Versioning
+	}
+	if err := process.apiJSON(ctx, http.MethodPatch, path, patch, nil); err != nil {
+		return errors.New("relocate managed folder through upstream API: " + err.Error())
+	}
+	var current struct {
+		Path       string                   `json:"path"`
+		Paused     bool                     `json:"paused"`
+		Versioning *managedFolderVersioning `json:"versioning"`
+	}
+	if err := process.apiJSON(ctx, http.MethodGet, path, nil, &current); err != nil {
+		return errors.New("verify relocated managed folder through upstream API: " + err.Error())
+	}
+	valid := current.Paused && filepath.Clean(current.Path) == request.Path
+	if request.Versioning != nil {
+		valid = valid && current.Versioning != nil &&
+			current.Versioning.Type == request.Versioning.Type &&
+			current.Versioning.FSType == request.Versioning.FSType &&
+			filepath.Clean(current.Versioning.FSPath) == request.Versioning.FSPath
+	}
+	if !valid {
+		return errors.New("upstream managed folder location did not match the enrolled card")
+	}
+	return nil
+}
+
+// SetManagedFolderDevices atomically pauses a managed folder while replacing
+// its exact membership, then verifies the resulting upstream configuration.
+func (process *Process) SetManagedFolderDevices(ctx context.Context, folder ConfiguredFolder) error {
+	request, err := managedFolderAPIRequest(folder)
+	if err != nil {
+		return err
+	}
+	path := "/rest/config/folders/" + url.PathEscape(folder.ID)
+	patch := map[string]any{"paused": true, "devices": request.Devices}
+	if err := process.apiJSON(ctx, http.MethodPatch, path, patch, nil); err != nil {
+		return errors.New("change managed folder devices through upstream API: " + err.Error())
+	}
+	var current struct {
+		Paused  bool                  `json:"paused"`
+		Devices []managedFolderDevice `json:"devices"`
+	}
+	if err := process.apiJSON(ctx, http.MethodGet, path, nil, &current); err != nil {
+		return errors.New("verify managed folder devices through upstream API: " + err.Error())
+	}
+	if !current.Paused || !sameManagedFolderDevices(current.Devices, request.Devices) {
+		return errors.New("upstream managed folder devices did not match the requested membership")
+	}
+	return nil
+}
+
+// RemoveManagedFolder is idempotent and verifies the folder is absent from the
+// complete runtime configuration. It never touches the configured filesystem
+// path; local marker and binding cleanup remain controller-owned.
+func (process *Process) RemoveManagedFolder(ctx context.Context, folderID string) error {
+	if !ValidFolderID(folderID) {
+		return errors.New("managed folder id is invalid")
+	}
+	present, err := process.configuredFolderPresent(ctx, folderID)
+	if err != nil || !present {
+		return err
+	}
+	path := "/rest/config/folders/" + url.PathEscape(folderID)
+	if err := process.apiJSON(ctx, http.MethodDelete, path, nil, nil); err != nil {
+		return errors.New("remove managed folder through upstream API: " + err.Error())
+	}
+	present, err = process.configuredFolderPresent(ctx, folderID)
+	if err != nil {
+		return errors.New("verify removed managed folder through upstream API: " + err.Error())
+	}
+	if present {
+		return errors.New("upstream managed folder remained configured after removal")
+	}
+	return nil
+}
+
+func (process *Process) configuredFolderPresent(ctx context.Context, folderID string) (bool, error) {
+	var folders []struct {
+		ID string `json:"id"`
+	}
+	if err := process.apiJSON(ctx, http.MethodGet, "/rest/config/folders", nil, &folders); err != nil {
+		return false, err
+	}
+	seen := make(map[string]bool, len(folders))
+	for _, folder := range folders {
+		if folder.ID == "" || seen[folder.ID] {
+			return false, errors.New("configured folder list is invalid or duplicated")
+		}
+		seen[folder.ID] = true
+	}
+	return seen[folderID], nil
+}
+
+func sameManagedFolderDevices(left, right []managedFolderDevice) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	want := make(map[string]bool, len(right))
+	for _, device := range right {
+		want[device.DeviceID] = true
+	}
+	seen := make(map[string]bool, len(left))
+	for _, device := range left {
+		if !want[device.DeviceID] || seen[device.DeviceID] {
+			return false
+		}
+		seen[device.DeviceID] = true
+	}
+	return true
+}
+
 func managedFolderAPIRequest(folder ConfiguredFolder) (managedFolderRequest, error) {
-	if !managedFolderIDPattern.MatchString(folder.ID) || !filepath.IsAbs(folder.Path) ||
+	if !ValidFolderID(folder.ID) || !filepath.IsAbs(folder.Path) ||
 		folder.MarkerName == "" || folder.MarkerName == ".stfolder" || filepath.Base(folder.MarkerName) != folder.MarkerName ||
 		!validDisplayName(strings.TrimSpace(folder.Label), maxFolderName) ||
 		(folder.Type != "sendonly" && folder.Type != "sendreceive" && folder.Type != "receiveonly") {
 		return managedFolderRequest{}, errors.New("managed folder request is invalid")
 	}
-	if len(folder.Devices) < 2 || len(folder.Devices) > maxFolderDevices {
-		return managedFolderRequest{}, errors.New("managed folder requires the local device and at least one peer")
+	if len(folder.Devices) < 1 || len(folder.Devices) > maxFolderDevices {
+		return managedFolderRequest{}, errors.New("managed folder requires the local device")
 	}
 	devices := make([]managedFolderDevice, 0, len(folder.Devices))
 	seen := make(map[string]bool, len(folder.Devices))

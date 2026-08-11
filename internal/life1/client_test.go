@@ -38,7 +38,7 @@ func TestConnectSubscribesAndQueriesStateOnSameConnection(t *testing.T) {
 			serverDone <- err
 			return
 		}
-		if subscribe.Operation != "subscribe" || subscribe.ServiceID != "org.umrk.syncthing" || subscribe.AckMS != 250 {
+		if subscribe.Operation != "subscribe" || subscribe.ServiceID != "org.umrk.syncthing" || subscribe.AckMS != 250 || subscribe.CheckBeforeStop {
 			serverDone <- errors.New("unexpected subscribe request")
 			return
 		}
@@ -165,6 +165,53 @@ func TestDecodeEventRejectsUnknownField(t *testing.T) {
 	_, err := decodeEvent(json.RawMessage(`{"v":1,"event":"game.finish","launch_id":"x","surprise":true}`))
 	if !errors.Is(err, ErrProtocol) {
 		t.Fatalf("decodeEvent() error = %v, want %v", err, ErrProtocol)
+	}
+}
+
+func TestDecodeGameCheckAndAbort(t *testing.T) {
+	event, err := decodeEvent(json.RawMessage(`{"v":1,"event":"game.check","launch_id":"launch","source_id":"primary","saves_path":"/card/Saves","states_path":"/card/States","wait_budget_ms":15000}`))
+	if err != nil || event.Name != "game.check" || event.WaitBudgetMS == nil || *event.WaitBudgetMS != 15000 {
+		t.Fatalf("game.check = %+v, %v", event, err)
+	}
+	event, err = decodeEvent(json.RawMessage(`{"v":1,"event":"game.abort","launch_id":"launch"}`))
+	if err != nil || event.Name != "game.abort" {
+		t.Fatalf("game.abort = %+v, %v", event, err)
+	}
+}
+
+func TestValidateConfigRestrictsCheckCapabilityToStopMode(t *testing.T) {
+	err := validateConfig(Config{
+		SocketPath: "/tmp/jawakad.sock", ServiceID: "org.umrk.syncthing",
+		Mode: ModeNotify, AckMS: 250, WaitMS: 15000, CheckBeforeStop: true,
+	})
+	if err == nil {
+		t.Fatal("notify mode accepted check-before-stop")
+	}
+}
+
+func TestCheckStatusWritersUseFrozenShapes(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	subscription := &Subscription{conn: client}
+	done := make(chan error, 1)
+	go func() {
+		if err := subscription.SendWaiting("launch", 3, 49152); err != nil {
+			done <- err
+			return
+		}
+		done <- subscription.SendStop("launch")
+	}()
+	payload, err := Read(server)
+	if err != nil || string(payload) != `{"v":1,"status":"waiting","launch_id":"launch","pending_items":3,"pending_bytes":49152}` {
+		t.Fatalf("waiting payload = %s, %v", payload, err)
+	}
+	payload, err = Read(server)
+	if err != nil || string(payload) != `{"v":1,"status":"stop","launch_id":"launch"}` {
+		t.Fatalf("stop payload = %s, %v", payload, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

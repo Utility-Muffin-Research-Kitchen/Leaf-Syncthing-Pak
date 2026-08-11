@@ -78,6 +78,7 @@ diagnostics                        last fixed-path redacted export, if any
 cards[]                            enrolled/configured physical-card rows
 folders[]                          managed-folder rows
 peers[]                            configured and pending peers with connection kind
+folder_offers[]                    pending or locally ignored Syncthing folder announcements
 issues[]                           display-safe controller/card/folder issues
 capabilities[]                     supported operation names
 ```
@@ -85,10 +86,20 @@ capabilities[]                     supported operation names
 Card rows freeze physical identity, current slot/root, state (`absent`,
 `unenrolled`, `enrolled`, `invalid`, or `duplicate`), presence, writability,
 duplicate-id state, retained bytes, and scoped issues. Folder rows freeze
-identity, card/kind/path/type, pause state and reasons, sizes, peers, last sync,
-versioning, an optional bounded conflict list, and scoped issues. Peer rows
+identity, card/kind/path/type, pause state and reasons, sizes, peer count, exact
+`device_ids` membership, last sync, versioning, an optional bounded conflict
+list, and scoped issues. They also include local needed items/bytes and a
+bounded remote summary (`current`, `syncing`, `offline`, `paused`,
+`not-sharing`, `unknown`, or `local-only`) with the first involved peer and
+aggregate needed items/bytes. Connected selected peers are checked with
+Syncthing's standard per-device/per-folder completion endpoint; an offline peer
+is reported honestly without making that expensive call. Peer rows
 distinguish `local`, `direct`, `relay`, and `none`; pending introductions are
-explicit and are never accepted by a status read. Counts and byte sizes are
+explicit and are never accepted by a status read. Folder-offer rows include
+the network folder ID and label, offering device ID/name, offer time,
+encryption flags, and local `ignored` state; status remains read-only and
+exposes at most 32 offers.
+Counts and byte sizes are
 non-negative; an empty timestamp is unknown. B3 still owns onboarding and
 first-sync release, so a strict pre-existing Leaf binding remains paused for
 `first-sync` until that phase's durable flow completes.
@@ -114,6 +125,35 @@ matching `card-id`. A replacement card at the remembered mountpoint therefore
 appears as a separate unenrolled row, and duplicate live IDs fail closed.
 
 Generic Run, Stop, and Start-with-Leaf operations remain CTL-1.
+
+## Guided setup and top-level status
+
+The foreground Guided setup entry is a resumable view over existing CTL-1 and
+UI-control operations; it adds no second configuration owner or wizard state.
+Each invocation derives the first incomplete step from durable service, card,
+peer, folder-binding, first-sync, and live completion state. It enables and
+starts Syncthing, enrolls a card, connects a peer, explicitly chooses Create or
+Join for Saves, presents the exact peer checklist, asks for the initial
+direction in plain language, and reuses the B3 snapshot/first-sync flow.
+The overview names that next action directly (`Enroll card`, `Fix card`,
+`Connect device`, `Set up Saves`, `Finish first sync`, `Syncing`, or `Fix
+issue`) instead of a generic continue label. If several cards already have
+independent Saves shares, the journey asks which share to continue and
+identifies each by its durable card suffix; it never guesses from the current
+mountpoint or changes the other shares.
+
+The journey does not finish at configuration acceptance. Its selected Saves
+folder must have completed first-sync protection, have zero local need, and
+report zero need for every connected selected peer. The same evidence drives
+the overview and folder-list labels:
+
+- `Up to date` only when every managed folder and selected peer is current;
+- `Syncing` with remaining items/bytes and the first involved peer; or
+- `Needs attention` with the first actionable offer, conflict, pause, folder,
+  card, peer, or controller reason.
+
+States is offered separately only after Saves reaches `Up to date`, with the
+emulator/core/version compatibility warning.
 
 ## `network.profile.set`
 
@@ -165,8 +205,11 @@ changes also close it.
 
 ## Folder operations
 
-All folder ids must name an existing strict Leaf binding. The UI never sends a
-path, and the controller never exposes a free-form path mutation.
+All folder ids must name an existing controller-registered Leaf binding. The
+network id may have been created by Leaf or offered by a standard Syncthing
+peer; its durable binding separately identifies the enrolled card, content
+kind, and local safety marker. The UI never sends a path, and the controller
+never exposes a free-form path mutation.
 
 ```json
 {"v":1,"id":"folder-inspect","op":"folder.inspect","args":{"folder_id":"leaf-saves-0011223344556677"}}
@@ -174,6 +217,7 @@ path, and the controller never exposes a free-form path mutation.
 {"v":1,"id":"folder-resume","op":"folder.resume","args":{"folder_id":"leaf-saves-0011223344556677"}}
 {"v":1,"id":"folder-rescan","op":"folder.rescan","args":{"folder_id":"leaf-saves-0011223344556677"}}
 {"v":1,"id":"folder-rename","op":"folder.rename","args":{"folder_id":"leaf-saves-0011223344556677","label":"Leaf Saves"}}
+{"v":1,"id":"folder-stop","op":"folder.stop","args":{"folder_id":"leaf-saves-0011223344556677","confirmed":true}}
 ```
 
 `folder.inspect` performs a bounded, symlink-rejecting scan of the validated
@@ -182,18 +226,118 @@ the total count. The device UI combines this with the controller's same-card
 snapshot/version inventory. Pause state is durable before the upstream pause
 request. A rescan requested while paused is durable and queued. Resume refuses
 while any non-manual reason remains, including B3's `first-sync` reason.
+`folder.stop` is a local unbinding operation, not data cleanup. The controller
+durably records the stop, forces the folder paused, removes and verifies the
+upstream folder, removes only the empty card-specific Leaf marker, and clears
+the binding last. Startup completes the same sequence after interruption. The
+live Saves/States tree, safety snapshots, and version history remain intact;
+history cleanup is a separate size-disclosing action.
+
+## Retained history cleanup
+
+The Storage screen can remove one exact snapshot or one Saves/States version
+history group. The request repeats the selected inventory row, including the
+byte count shown at confirmation time:
+
+```json
+{"v":1,"id":"storage-cleanup","op":"storage.cleanup","args":{"card_suffix":"ccddeeff","category":"snapshot","kind":"saves","name":"first-sync-20260809T123456Z-deadbeef","bytes":4096,"confirmed":true}}
+```
+
+The controller rebuilds the symlink-rejecting inventory and requires exactly
+one row to match every field. A changed size requires the user to review and
+confirm again. First-sync snapshots cannot be removed while their protection
+is pending, and active version history requires its managed folder to be
+paused. Only the selected state root is removed; the live Saves/States tree is
+never a cleanup target.
+
+Creating a folder requires an explicit, non-empty peer selection:
+
+```json
+{"v":1,"id":"folder-plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"]}}
+```
+
+The controller checks that every selected ID is a unique configured peer both
+when it creates the review and when it consumes the plan. Peers added after the
+review are not silently included. The foreground UI presents the configured
+peers as an Include/Exclude checklist before requesting the review.
+
+## Folder sharing
+
+An existing managed folder is shared or unshared with exactly one already
+configured peer at a time:
+
+```json
+{"v":1,"id":"share","op":"folder.share","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+{"v":1,"id":"unshare","op":"folder.unshare","args":{"folder_id":"leaf-saves-0011223344556677","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+```
+
+The foreground Sharing screen derives its checklist from the exact
+`folders[].device_ids` list; adding a device never shares existing folders
+automatically. The controller durably records the requested pair, pauses the
+folder, patches and re-reads upstream configuration, clears the intent, and
+then restores the safety-derived pause state. Startup completes an interrupted
+intent before normal mutations become available. Unsharing the final remote
+peer leaves the local managed folder and live files intact so it can be shared
+again later.
+
+## Folder-offer planning
+
+`status.get` exposes pending offers without accepting them. To review one
+against a selected enrolled card and local direction, the UI sends:
+
+```json
+{"v":1,"id":"offer-plan","op":"folder.offer.plan","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","source_id":"primary","kind":"saves","folder_type":"sendreceive"}}
+```
+
+The controller re-reads live offers, rejects encrypted or vanished offers, and
+returns the normal bounded onboarding review with `join_existing:true` and the
+offering device ID. The existing confirmed `folder.onboard.create` operation
+consumes that plan. Leaf retains the offered network folder ID but supplies its
+own card path, type, custom marker, paused first-sync state, and same-card
+versioning. Only the offering device is included; unrelated configured peers
+are never silently added. A pending binding is flushed before the upstream add;
+startup activates it if the paused upstream folder exists or rolls it back if
+the add never happened, without deleting the live Saves/States tree.
+The foreground Folders screen shows a pending-offer count, the offering device,
+and an explicit card/content/direction review; encrypted offers are labeled as
+unsupported and cannot enter the creation flow.
+
+An offer can be hidden without changing the remote Syncthing configuration:
+
+```json
+{"v":1,"id":"ignore","op":"folder.offer.ignore","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+{"v":1,"id":"restore","op":"folder.offer.restore","args":{"folder_id":"retro-saves","device_id":"IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP","confirmed":true}}
+```
+
+The preference is keyed by folder and offering device, stored atomically with
+the existing bounded folder-control state, and survives controller restarts.
+Ignored offers remain visible in a separate count/list state so the user can
+restore and review them later. Planning an ignored offer is rejected until it
+is restored.
 
 ## Device operations
 
 ```json
 {"v":1,"id":"device-add","op":"device.add","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}
 {"v":1,"id":"device-rename","op":"device.rename","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","name":"Laptop"}}
+{"v":1,"id":"device-remove","op":"device.remove","args":{"device_id":"AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH","confirmed":true}}
 ```
 
 The controller accepts a canonical device id or a `syncthing://` device URI.
 New peers always use dynamic addresses, never become introducers, never
 auto-accept folders, and inherit the current route-derived LAN boundary.
 Pending devices are shown by status but require this explicit add operation.
+After a successful add, the foreground UI offers **Share existing folders?**
+and presents every unshared managed folder as an explicit Include/Exclude
+checklist, defaulting to Exclude. Each selected `folder.share` is independently
+durable and verified; unselected folders and all other peer memberships remain
+unchanged.
+Removal is refused while any managed folder still includes the peer. The UI
+lists those folders and directs the user to each Sharing screen; it never
+silently changes memberships. Once none remain, the controller stores a
+durable removal intent, idempotently removes and verifies the configured peer,
+then clears the intent. Startup completes an interrupted removal. Managed
+folders and live Saves/States trees are never removed by this operation.
 
 ## Logging and diagnostics
 

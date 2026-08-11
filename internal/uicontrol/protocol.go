@@ -25,15 +25,23 @@ const (
 	OperationFolderRename           = "folder.rename"
 	OperationFolderInspect          = "folder.inspect"
 	OperationFolderOnboardPlan      = "folder.onboard.plan"
+	OperationFolderOfferPlan        = "folder.offer.plan"
+	OperationFolderOfferIgnore      = "folder.offer.ignore"
+	OperationFolderOfferRestore     = "folder.offer.restore"
 	OperationFolderOnboardCreate    = "folder.onboard.create"
 	OperationFolderFirstSyncPrepare = "folder.first-sync.prepare"
 	OperationFolderFirstSyncStart   = "folder.first-sync.start"
 	OperationFolderTypeSet          = "folder.type.set"
+	OperationFolderShare            = "folder.share"
+	OperationFolderUnshare          = "folder.unshare"
+	OperationFolderStop             = "folder.stop"
 	OperationDeviceAdd              = "device.add"
 	OperationDeviceRename           = "device.rename"
+	OperationDeviceRemove           = "device.remove"
 	OperationResetPrepare           = "reset.prepare"
 	OperationLogLevelSet            = "log.level.set"
 	OperationDiagnosticsExport      = "diagnostics.export"
+	OperationStorageCleanup         = "storage.cleanup"
 	MaxIdentifier                   = 64
 )
 
@@ -58,22 +66,23 @@ type Response struct {
 }
 
 type Status struct {
-	Controller   string             `json:"controller"`
-	Upstream     UpstreamStatus     `json:"upstream"`
-	Game         GameStatus         `json:"game"`
-	Recovery     RecoveryStatus     `json:"recovery"`
-	Network      *NetworkStatus     `json:"network,omitempty"`
-	Gateway      *GatewayStatus     `json:"gateway,omitempty"`
-	Transfer     *TransferStatus    `json:"transfer,omitempty"`
-	Logging      *LoggingStatus     `json:"logging,omitempty"`
-	Storage      *StorageStatus     `json:"storage,omitempty"`
-	Diagnostics  *DiagnosticsStatus `json:"diagnostics,omitempty"`
-	Onboarding   *OnboardingStatus  `json:"onboarding,omitempty"`
-	Cards        []CardStatus       `json:"cards"`
-	Folders      []FolderStatus     `json:"folders"`
-	Peers        []PeerStatus       `json:"peers,omitempty"`
-	Issues       []Issue            `json:"issues"`
-	Capabilities []string           `json:"capabilities"`
+	Controller   string              `json:"controller"`
+	Upstream     UpstreamStatus      `json:"upstream"`
+	Game         GameStatus          `json:"game"`
+	Recovery     RecoveryStatus      `json:"recovery"`
+	Network      *NetworkStatus      `json:"network,omitempty"`
+	Gateway      *GatewayStatus      `json:"gateway,omitempty"`
+	Transfer     *TransferStatus     `json:"transfer,omitempty"`
+	Logging      *LoggingStatus      `json:"logging,omitempty"`
+	Storage      *StorageStatus      `json:"storage,omitempty"`
+	Diagnostics  *DiagnosticsStatus  `json:"diagnostics,omitempty"`
+	Onboarding   *OnboardingStatus   `json:"onboarding,omitempty"`
+	Cards        []CardStatus        `json:"cards"`
+	Folders      []FolderStatus      `json:"folders"`
+	Peers        []PeerStatus        `json:"peers,omitempty"`
+	FolderOffers []FolderOfferStatus `json:"folder_offers,omitempty"`
+	Issues       []Issue             `json:"issues"`
+	Capabilities []string            `json:"capabilities"`
 }
 
 type NetworkStatus struct {
@@ -145,6 +154,8 @@ type OnboardingStatus struct {
 	SnapshotPossible bool   `json:"snapshot_possible"`
 	PeerCount        int    `json:"peer_count"`
 	StatesWarning    bool   `json:"states_warning"`
+	JoinExisting     bool   `json:"join_existing,omitempty"`
+	OfferDeviceID    string `json:"offer_device_id,omitempty"`
 	ExpiresAt        string `json:"expires_at"`
 }
 
@@ -199,7 +210,14 @@ type FolderStatus struct {
 	GlobalBytes         int64    `json:"global_bytes"`
 	LocalItems          int      `json:"local_items,omitempty"`
 	GlobalItems         int      `json:"global_items,omitempty"`
+	NeedBytes           int64    `json:"need_bytes,omitempty"`
+	NeedItems           int      `json:"need_items,omitempty"`
+	RemoteState         string   `json:"remote_state,omitempty"`
+	RemotePeer          string   `json:"remote_peer,omitempty"`
+	RemoteNeedBytes     int64    `json:"remote_need_bytes,omitempty"`
+	RemoteNeedItems     int      `json:"remote_need_items,omitempty"`
 	PeerCount           int      `json:"peer_count"`
+	DeviceIDs           []string `json:"device_ids"`
 	LastSync            string   `json:"last_sync"`
 	Versioning          string   `json:"versioning"`
 	FirstSyncState      string   `json:"first_sync_state,omitempty"`
@@ -226,6 +244,18 @@ type PeerStatus struct {
 	Pending      bool   `json:"pending"`
 }
 
+type FolderOfferStatus struct {
+	FolderID         string `json:"folder_id"`
+	Label            string `json:"label"`
+	DeviceID         string `json:"device_id"`
+	DeviceIDSuffix   string `json:"device_id_suffix"`
+	DeviceName       string `json:"device_name"`
+	OfferedAt        string `json:"offered_at"`
+	ReceiveEncrypted bool   `json:"receive_encrypted"`
+	RemoteEncrypted  bool   `json:"remote_encrypted"`
+	Ignored          bool   `json:"ignored"`
+}
+
 type Issue struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
@@ -240,15 +270,19 @@ type Operations struct {
 	GatewayAction     func(string) (Status, *ProtocolError)
 	FolderAction      func(string, string, string) (Status, *ProtocolError)
 	FolderInspect     func(string) (Status, *ProtocolError)
-	PlanFolder        func(string, string, string) (Status, *ProtocolError)
+	PlanFolder        func(string, string, string, []string) (Status, *ProtocolError)
+	PlanFolderOffer   func(string, string, string, string, string) (Status, *ProtocolError)
+	FolderOfferAction func(string, string, string) (Status, *ProtocolError)
 	CreateFolder      func(string, bool, bool) (Status, *ProtocolError)
 	PrepareFirstSync  func(string) (Status, *ProtocolError)
 	StartFirstSync    func(string, bool) (Status, *ProtocolError)
 	SetFolderType     func(string, string) (Status, *ProtocolError)
+	FolderMembership  func(string, string, string) (Status, *ProtocolError)
 	DeviceAction      func(string, string, string) (Status, *ProtocolError)
 	PrepareReset      func(string) (Status, *ProtocolError)
 	SetLogLevel       func(string) (Status, *ProtocolError)
 	ExportDiagnostics func() (Status, *ProtocolError)
+	CleanupStorage    func(string, string, string, string, int64) (Status, *ProtocolError)
 }
 
 // Handle validates one request and returns one bounded response. Request
@@ -346,6 +380,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationFolderStop:
+		if operations.FolderAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, err := decodeConfirmedIDArguments(request.Arguments, "folder_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.stop requires a valid folder_id and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderAction(request.Operation, folderID, "")
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	case OperationFolderInspect:
 		if operations.FolderInspect == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
@@ -376,12 +423,51 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operations.PlanFolder == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
 		}
-		sourceID, kind, folderType, err := decodeOnboardingPlanArguments(request.Arguments)
+		sourceID, kind, folderType, deviceIDs, err := decodeOnboardingPlanArguments(request.Arguments)
 		if err != nil {
-			return failure(responseID, "bad-arguments", "folder.onboard.plan requires a valid source, kind, and folder type")
+			return failure(responseID, "bad-arguments", "folder.onboard.plan requires a valid source, kind, folder type, and peer selection")
 		}
 		var operationError *ProtocolError
-		status, operationError = operations.PlanFolder(sourceID, kind, folderType)
+		status, operationError = operations.PlanFolder(sourceID, kind, folderType, deviceIDs)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderOfferPlan:
+		if operations.PlanFolderOffer == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, sourceID, kind, folderType, err := decodeFolderOfferPlanArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder.offer.plan requires a valid offer, source, kind, and folder type")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.PlanFolderOffer(folderID, deviceID, sourceID, kind, folderType)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderOfferIgnore, OperationFolderOfferRestore:
+		if operations.FolderOfferAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, err := decodeFolderMembershipArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder offer action requires a valid offer and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderOfferAction(request.Operation, folderID, deviceID)
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationFolderShare, OperationFolderUnshare:
+		if operations.FolderMembership == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		folderID, deviceID, err := decodeFolderMembershipArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "folder membership requires a valid folder, configured peer, and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.FolderMembership(request.Operation, folderID, deviceID)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
@@ -450,6 +536,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
+	case OperationDeviceRemove:
+		if operations.DeviceAction == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		deviceID, err := decodeConfirmedIDArguments(request.Arguments, "device_id")
+		if err != nil {
+			return failure(responseID, "bad-arguments", "device removal requires a valid device_id and confirmation")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.DeviceAction(request.Operation, deviceID, "")
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
 	case OperationResetPrepare:
 		if operations.PrepareReset == nil {
 			return failure(responseID, "unsupported-op", "unsupported UI control operation")
@@ -485,6 +584,19 @@ func (operations Operations) Handle(payload json.RawMessage) Response {
 		}
 		var operationError *ProtocolError
 		status, operationError = operations.ExportDiagnostics()
+		if operationError != nil {
+			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
+		}
+	case OperationStorageCleanup:
+		if operations.CleanupStorage == nil {
+			return failure(responseID, "unsupported-op", "unsupported UI control operation")
+		}
+		cardSuffix, category, kind, name, bytes, err := decodeStorageCleanupArguments(request.Arguments)
+		if err != nil {
+			return failure(responseID, "bad-arguments", "storage.cleanup requires one exact confirmed inventory row")
+		}
+		var operationError *ProtocolError
+		status, operationError = operations.CleanupStorage(cardSuffix, category, kind, name, bytes)
 		if operationError != nil {
 			return Response{Version: Version, ID: responseID, OK: false, Error: operationError}
 		}
@@ -545,8 +657,36 @@ func decodeEnrollCardArguments(raw json.RawMessage) (string, error) {
 	return arguments.SourceID, nil
 }
 
-func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string, error) {
+func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string, []string, error) {
 	var arguments struct {
+		SourceID   string   `json:"source_id"`
+		Kind       string   `json:"kind"`
+		FolderType string   `json:"folder_type"`
+		DeviceIDs  []string `json:"device_ids"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", "", nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.SourceID) ||
+		(arguments.Kind != "saves" && arguments.Kind != "states") ||
+		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") ||
+		len(arguments.DeviceIDs) == 0 || len(arguments.DeviceIDs) > 32 {
+		return "", "", "", nil, errors.New("invalid onboarding plan arguments")
+	}
+	for _, deviceID := range arguments.DeviceIDs {
+		if !validIdentifier(deviceID) {
+			return "", "", "", nil, errors.New("invalid onboarding peer selection")
+		}
+	}
+	return arguments.SourceID, arguments.Kind, arguments.FolderType, arguments.DeviceIDs, nil
+}
+
+func decodeFolderOfferPlanArguments(raw json.RawMessage) (string, string, string, string, string, error) {
+	var arguments struct {
+		FolderID   string `json:"folder_id"`
+		DeviceID   string `json:"device_id"`
 		SourceID   string `json:"source_id"`
 		Kind       string `json:"kind"`
 		FolderType string `json:"folder_type"`
@@ -554,14 +694,33 @@ func decodeOnboardingPlanArguments(raw json.RawMessage) (string, string, string,
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&arguments); err != nil {
-		return "", "", "", err
+		return "", "", "", "", "", err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.SourceID) ||
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !validIdentifier(arguments.FolderID) ||
+		!validIdentifier(arguments.DeviceID) || !validIdentifier(arguments.SourceID) ||
 		(arguments.Kind != "saves" && arguments.Kind != "states") ||
 		(arguments.FolderType != "sendonly" && arguments.FolderType != "sendreceive" && arguments.FolderType != "receiveonly") {
-		return "", "", "", errors.New("invalid onboarding plan arguments")
+		return "", "", "", "", "", errors.New("invalid folder offer plan arguments")
 	}
-	return arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+	return arguments.FolderID, arguments.DeviceID, arguments.SourceID, arguments.Kind, arguments.FolderType, nil
+}
+
+func decodeFolderMembershipArguments(raw json.RawMessage) (string, string, error) {
+	var arguments struct {
+		FolderID  string `json:"folder_id"`
+		DeviceID  string `json:"device_id"`
+		Confirmed bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		!validIdentifier(arguments.FolderID) || !validIdentifier(arguments.DeviceID) {
+		return "", "", errors.New("invalid folder membership arguments")
+	}
+	return arguments.FolderID, arguments.DeviceID, nil
 }
 
 func decodeOnboardingCreateArguments(raw json.RawMessage) (string, bool, bool, error) {
@@ -653,6 +812,26 @@ func decodeIDArguments(raw json.RawMessage, field string) (string, error) {
 	return value, nil
 }
 
+func decodeConfirmedIDArguments(raw json.RawMessage, field string) (string, error) {
+	var arguments map[string]json.RawMessage
+	if err := decodeStrictMap(raw, &arguments); err != nil || len(arguments) != 2 {
+		return "", errors.New("invalid confirmed id arguments")
+	}
+	encoded, ok := arguments[field]
+	if !ok {
+		return "", errors.New("missing id")
+	}
+	var value string
+	if err := json.Unmarshal(encoded, &value); err != nil || !validIdentifier(value) {
+		return "", errors.New("invalid id")
+	}
+	var confirmed bool
+	if err := json.Unmarshal(arguments["confirmed"], &confirmed); err != nil || !confirmed {
+		return "", errors.New("confirmation is required")
+	}
+	return value, nil
+}
+
 func decodeNamedArguments(raw json.RawMessage, idField, nameField string, maxName int) (string, string, error) {
 	var arguments map[string]json.RawMessage
 	if err := decodeStrictMap(raw, &arguments); err != nil || len(arguments) != 2 {
@@ -706,6 +885,30 @@ func decodeLogLevelArguments(raw json.RawMessage) (string, error) {
 		return "", errors.New("invalid log level")
 	}
 	return arguments.Level, nil
+}
+
+func decodeStorageCleanupArguments(raw json.RawMessage) (string, string, string, string, int64, error) {
+	var arguments struct {
+		CardSuffix string `json:"card_suffix"`
+		Category   string `json:"category"`
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		Bytes      int64  `json:"bytes"`
+		Confirmed  bool   `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&arguments); err != nil {
+		return "", "", "", "", 0, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) || !arguments.Confirmed ||
+		!validDisplayText(arguments.CardSuffix, 16) ||
+		(arguments.Category != "snapshot" && arguments.Category != "versions") ||
+		(arguments.Kind != "saves" && arguments.Kind != "states") ||
+		!validDisplayText(arguments.Name, 128) || arguments.Bytes < 0 || arguments.Bytes > 9007199254740991 {
+		return "", "", "", "", 0, errors.New("invalid storage cleanup arguments")
+	}
+	return arguments.CardSuffix, arguments.Category, arguments.Kind, arguments.Name, arguments.Bytes, nil
 }
 
 func decodeStrictMap(raw json.RawMessage, target *map[string]json.RawMessage) error {
@@ -791,6 +994,9 @@ func (status *Status) normalize() {
 	if status.Peers != nil {
 		status.Peers = append([]PeerStatus(nil), status.Peers...)
 	}
+	if status.FolderOffers != nil {
+		status.FolderOffers = append([]FolderOfferStatus(nil), status.FolderOffers...)
+	}
 	if status.Recovery.RemovePaths != nil {
 		status.Recovery.RemovePaths = append([]string(nil), status.Recovery.RemovePaths...)
 	}
@@ -815,6 +1021,11 @@ func (status *Status) normalize() {
 		}
 	}
 	for index := range status.Folders {
+		if status.Folders[index].DeviceIDs == nil {
+			status.Folders[index].DeviceIDs = []string{}
+		} else {
+			status.Folders[index].DeviceIDs = append([]string(nil), status.Folders[index].DeviceIDs...)
+		}
 		if status.Folders[index].Conflicts != nil {
 			status.Folders[index].Conflicts = append([]string(nil), status.Folders[index].Conflicts...)
 		}
@@ -858,7 +1069,8 @@ func (status Status) validate() error {
 			len(plan.Path) == 0 || len(plan.Path) > 1024 ||
 			!oneOf(plan.Kind, "saves", "states") || !oneOf(plan.FolderType, "sendonly", "sendreceive", "receiveonly") ||
 			plan.FileCount < 0 || plan.DirectoryCount < 0 || plan.ContentBytes < 0 || plan.AvailableBytes < 0 ||
-			plan.PeerCount < 1 || plan.ExpiresAt == "" || len(plan.ExpiresAt) > 64 {
+			plan.PeerCount < 1 || plan.ExpiresAt == "" || len(plan.ExpiresAt) > 64 ||
+			plan.JoinExisting != (plan.OfferDeviceID != "") || (plan.JoinExisting && !validIdentifier(plan.OfferDeviceID)) {
 			return errors.New("invalid folder onboarding status")
 		}
 	}
@@ -882,7 +1094,7 @@ func (status Status) validate() error {
 	if status.Upstream.State == "running" && (status.Upstream.Version == "" || status.Upstream.DeviceID == "") {
 		return errors.New("incomplete running status")
 	}
-	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Peers) > 128 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
+	if len(status.Cards) > 128 || len(status.Folders) > 128 || len(status.Peers) > 128 || len(status.FolderOffers) > 32 || len(status.Issues) > 128 || len(status.Capabilities) > 64 {
 		return errors.New("status exceeds row limits")
 	}
 	for _, card := range status.Cards {
@@ -892,11 +1104,24 @@ func (status Status) validate() error {
 		}
 	}
 	for _, folder := range status.Folders {
-		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 || folder.PeerCount < 0 ||
+		if folder.LocalBytes < 0 || folder.GlobalBytes < 0 || folder.LocalItems < 0 || folder.GlobalItems < 0 ||
+			folder.NeedBytes < 0 || folder.NeedItems < 0 || folder.RemoteNeedBytes < 0 || folder.RemoteNeedItems < 0 ||
+			folder.PeerCount < 0 ||
 			folder.SnapshotFiles < 0 || folder.SnapshotDirectories < 0 || folder.SnapshotBytes < 0 ||
 			folder.ConflictCount < 0 || folder.ConflictCount < len(folder.Conflicts) ||
-			len(folder.Conflicts) > 64 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
+			len(folder.Conflicts) > 64 || len(folder.DeviceIDs) > 33 || len(folder.PauseReasons) > 16 || len(folder.Issues) > 128 {
 			return errors.New("folder status is outside protocol bounds")
+		}
+		if folder.RemoteState != "" && !oneOf(folder.RemoteState, "local-only", "current", "syncing", "offline", "paused", "not-sharing", "unknown") {
+			return errors.New("folder remote completion state is outside protocol bounds")
+		}
+		if folder.RemotePeer != "" && !validDisplayText(folder.RemotePeer, 64) {
+			return errors.New("folder remote peer is outside protocol bounds")
+		}
+		for _, deviceID := range folder.DeviceIDs {
+			if !validIdentifier(deviceID) {
+				return errors.New("folder device membership is outside protocol bounds")
+			}
 		}
 		if folder.FirstSyncState != "" && !oneOf(folder.FirstSyncState, "required", "preparing", "ready", "complete", "error") {
 			return errors.New("folder first-sync state is outside protocol bounds")
@@ -914,6 +1139,13 @@ func (status Status) validate() error {
 		if peer.ID == "" || peer.Name == "" || !oneOf(peer.State, "offline", "connected", "paused", "pending") ||
 			!oneOf(peer.Connection, "none", "local", "direct", "relay") {
 			return errors.New("peer status is outside protocol bounds")
+		}
+	}
+	for _, offer := range status.FolderOffers {
+		if !validIdentifier(offer.FolderID) || !validDisplayText(offer.Label, 96) ||
+			offer.DeviceID == "" || offer.DeviceIDSuffix == "" || !validDisplayText(offer.DeviceName, 64) ||
+			len(offer.OfferedAt) > 64 {
+			return errors.New("folder offer is outside protocol bounds")
 		}
 	}
 	return nil

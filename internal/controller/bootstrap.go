@@ -45,6 +45,7 @@ type Config struct {
 	Mode            life1.Mode
 	AckMS           int
 	WaitMS          int
+	CheckBeforeStop bool
 	RetryDelay      time.Duration
 }
 
@@ -52,6 +53,8 @@ type Lifecycle interface {
 	Close() error
 	Next(context.Context) (life1.Event, error)
 	SendReady(string) error
+	SendWaiting(string, int, int64) error
+	SendStop(string) error
 	SendError(string, string) error
 }
 
@@ -119,7 +122,8 @@ func LoadConfig() (Config, error) {
 		Sources:         environment.Sources,
 		Mode:            life1.ModeStop,
 		AckMS:           life1.DefaultAckMS,
-		WaitMS:          life1.DefaultWaitMS,
+		WaitMS:          life1.DefaultCheckWaitMS,
+		CheckBeforeStop: true,
 		RetryDelay:      DefaultRetry,
 	}, nil
 }
@@ -182,23 +186,26 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("ensure upstream identity: %w", err)
 	}
-	loadFolders := runner.LoadFolders
-	if loadFolders == nil {
-		loadFolders = syncthingconfig.ReadManagedFolders
-	}
-	folders, err := loadFolders(runner.Config.ConfigDir)
-	if err != nil {
-		_ = lifecycle.Close()
-		return nil, fmt.Errorf("read managed folders: %w", err)
-	}
 	controlPath := filepath.Join(runner.Config.UserdataPath, leaf.AppStateName, "leaf", folderControlStateName)
-	folderControls, err := newFolderControlStore(controlPath, folders)
+	storedControls, _, _, controlSchema, _, err := readFolderControlState(controlPath)
 	if err != nil {
 		_ = lifecycle.Close()
 		return nil, fmt.Errorf("load folder control state: %w", err)
 	}
+	legacyFolders := []syncthingconfig.ConfiguredFolder{}
+	if runner.LoadFolders != nil || controlSchema != 2 {
+		loadFolders := runner.LoadFolders
+		if loadFolders == nil {
+			loadFolders = syncthingconfig.ReadManagedFolders
+		}
+		legacyFolders, err = loadFolders(runner.Config.ConfigDir)
+		if err != nil {
+			_ = lifecycle.Close()
+			return nil, fmt.Errorf("read managed folders: %w", err)
+		}
+	}
 	inventory := []cards.Card{}
-	if len(folders) > 0 {
+	if len(legacyFolders) > 0 || len(storedControls) > 0 {
 		loadCards := runner.LoadCards
 		if loadCards == nil {
 			loadCards = func(sources leaf.SourceList, registryDirectory string) ([]cards.Card, error) {
@@ -214,6 +221,40 @@ func (runner Runner) Bootstrap(ctx context.Context) (*Session, error) {
 		if err != nil {
 			_ = lifecycle.Close()
 			return nil, fmt.Errorf("verify cards before offline pause: %w", err)
+		}
+	}
+	folderControls, err := newFolderControlStore(controlPath, legacyFolders, inventory)
+	if err != nil {
+		_ = lifecycle.Close()
+		return nil, fmt.Errorf("load folder control state: %w", err)
+	}
+	folders := legacyFolders
+	if runner.LoadFolders == nil {
+		folders, err = syncthingconfig.ReadAvailableManagedFoldersForBindings(runner.Config.ConfigDir, folderControls.BindingKinds())
+		if err != nil {
+			_ = lifecycle.Close()
+			return nil, fmt.Errorf("read bound managed folders: %w", err)
+		}
+		configured := make(map[string]bool, len(folders))
+		for _, folder := range folders {
+			configured[folder.ID] = true
+		}
+		for folderID, record := range folderControls.Snapshot() {
+			switch {
+			case configured[folderID] && record.PendingAdd:
+				err = folderControls.Activate(folderID)
+			case !configured[folderID] && record.PendingAdd:
+				err = folderControls.Remove(folderID)
+			case !configured[folderID] && record.PendingStop:
+				// Runtime recovery removes the local marker and binding after
+				// verifying the upstream folder is still absent.
+			case !configured[folderID]:
+				err = errors.New("active registered folder is missing from upstream config")
+			}
+			if err != nil {
+				_ = lifecycle.Close()
+				return nil, fmt.Errorf("reconcile folder add transaction: %w", err)
+			}
 		}
 	}
 	firstSync, err := newFirstSyncManager(folders, inventory, folderControls, runner.FirstSyncOptions)
@@ -256,11 +297,12 @@ func (runner Runner) establishLifecycle(ctx context.Context) (Lifecycle, life1.G
 	}
 	for {
 		lifecycle, state, err := connect(ctx, life1.Config{
-			SocketPath: runner.Config.DaemonSocket,
-			ServiceID:  ServiceID,
-			Mode:       runner.Config.Mode,
-			AckMS:      runner.Config.AckMS,
-			WaitMS:     runner.Config.WaitMS,
+			SocketPath:      runner.Config.DaemonSocket,
+			ServiceID:       ServiceID,
+			Mode:            runner.Config.Mode,
+			AckMS:           runner.Config.AckMS,
+			WaitMS:          runner.Config.WaitMS,
+			CheckBeforeStop: runner.Config.CheckBeforeStop,
 		})
 		if err == nil {
 			return lifecycle, state, nil
@@ -313,6 +355,9 @@ func (config Config) validate() error {
 	}
 	if config.Mode != life1.ModeNotify && config.Mode != life1.ModeStop {
 		return fmt.Errorf("leaf-syncthing: unsupported game mode %q", config.Mode)
+	}
+	if config.CheckBeforeStop && config.Mode != life1.ModeStop {
+		return errors.New("leaf-syncthing: check-before-stop requires stop mode")
 	}
 	if config.AckMS < 0 || config.WaitMS < 0 || config.RetryDelay < 0 {
 		return errors.New("leaf-syncthing: lifecycle timings must be non-negative")

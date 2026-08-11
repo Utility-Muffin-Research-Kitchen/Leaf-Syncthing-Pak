@@ -71,6 +71,7 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
     const cJSON *cards;
     const cJSON *folders;
     const cJSON *peers;
+    const cJSON *folder_offers;
     const cJSON *issues;
     const cJSON *capabilities;
     const cJSON *value;
@@ -276,17 +277,27 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         value = cJSON_GetObjectItemCaseSensitive(onboarding, "states_warning");
         if (!cJSON_IsBool(value)) return -1;
         plan->states_warning = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(onboarding, "join_existing");
+        if (value) {
+            if (!cJSON_IsBool(value)) return -1;
+            plan->join_existing = cJSON_IsTrue(value);
+        }
+        if (ls_copy_optional_json(plan->offer_device_id, sizeof(plan->offer_device_id),
+                                  cJSON_GetObjectItemCaseSensitive(onboarding, "offer_device_id")) != 0 ||
+            (plan->join_existing != (plan->offer_device_id[0] != '\0'))) return -1;
         status->onboarding_present = true;
     }
 
     cards = cJSON_GetObjectItemCaseSensitive(result, "cards");
     folders = cJSON_GetObjectItemCaseSensitive(result, "folders");
     peers = cJSON_GetObjectItemCaseSensitive(result, "peers");
+    folder_offers = cJSON_GetObjectItemCaseSensitive(result, "folder_offers");
     issues = cJSON_GetObjectItemCaseSensitive(result, "issues");
     capabilities = cJSON_GetObjectItemCaseSensitive(result, "capabilities");
     if (!cJSON_IsArray(cards) || cJSON_GetArraySize(cards) > LS_UI_MAX_CARDS ||
         !cJSON_IsArray(folders) || cJSON_GetArraySize(folders) > LS_UI_MAX_FOLDERS ||
         (peers && (!cJSON_IsArray(peers) || cJSON_GetArraySize(peers) > LS_UI_MAX_PEERS)) ||
+        (folder_offers && (!cJSON_IsArray(folder_offers) || cJSON_GetArraySize(folder_offers) > LS_UI_MAX_FOLDER_OFFERS)) ||
         !cJSON_IsArray(issues) || cJSON_GetArraySize(issues) > LS_UI_MAX_ISSUES ||
         !cJSON_IsArray(capabilities) || cJSON_GetArraySize(capabilities) > LS_UI_MAX_CAPABILITIES) return -1;
 
@@ -342,6 +353,30 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         }
     }
 
+    if (folder_offers) {
+        status->folder_offer_count = cJSON_GetArraySize(folder_offers);
+        for (index = 0; index < status->folder_offer_count; index++) {
+            const cJSON *item = cJSON_GetArrayItem(folder_offers, index);
+            ls_ui_folder_offer *offer = &status->folder_offers[index];
+            if (!cJSON_IsObject(item) ||
+                ls_copy_json(offer->folder_id, sizeof(offer->folder_id), cJSON_GetObjectItemCaseSensitive(item, "folder_id")) != 0 ||
+                ls_copy_json(offer->label, sizeof(offer->label), cJSON_GetObjectItemCaseSensitive(item, "label")) != 0 ||
+                ls_copy_json(offer->device_id, sizeof(offer->device_id), cJSON_GetObjectItemCaseSensitive(item, "device_id")) != 0 ||
+                ls_copy_json(offer->device_id_suffix, sizeof(offer->device_id_suffix), cJSON_GetObjectItemCaseSensitive(item, "device_id_suffix")) != 0 ||
+                ls_copy_json(offer->device_name, sizeof(offer->device_name), cJSON_GetObjectItemCaseSensitive(item, "device_name")) != 0 ||
+                ls_copy_json(offer->offered_at, sizeof(offer->offered_at), cJSON_GetObjectItemCaseSensitive(item, "offered_at")) != 0) return -1;
+            value = cJSON_GetObjectItemCaseSensitive(item, "receive_encrypted");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->receive_encrypted = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "remote_encrypted");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->remote_encrypted = cJSON_IsTrue(value);
+            value = cJSON_GetObjectItemCaseSensitive(item, "ignored");
+            if (!cJSON_IsBool(value)) return -1;
+            offer->ignored = cJSON_IsTrue(value);
+        }
+    }
+
     status->folder_count = cJSON_GetArraySize(folders);
     for (index = 0; index < status->folder_count; index++) {
         const cJSON *item = cJSON_GetArrayItem(folders, index);
@@ -358,13 +393,22 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
             ls_copy_json(folder->versioning, sizeof(folder->versioning), cJSON_GetObjectItemCaseSensitive(item, "versioning")) != 0 ||
             ls_copy_optional_json(folder->first_sync_state, sizeof(folder->first_sync_state), cJSON_GetObjectItemCaseSensitive(item, "first_sync_state")) != 0 ||
             ls_copy_optional_json(folder->snapshot_name, sizeof(folder->snapshot_name), cJSON_GetObjectItemCaseSensitive(item, "snapshot_name")) != 0 ||
-            ls_copy_optional_json(folder->first_sync_message, sizeof(folder->first_sync_message), cJSON_GetObjectItemCaseSensitive(item, "first_sync_message")) != 0) return -1;
+            ls_copy_optional_json(folder->first_sync_message, sizeof(folder->first_sync_message), cJSON_GetObjectItemCaseSensitive(item, "first_sync_message")) != 0 ||
+            ls_copy_optional_json(folder->remote_state, sizeof(folder->remote_state), cJSON_GetObjectItemCaseSensitive(item, "remote_state")) != 0 ||
+            ls_copy_optional_json(folder->remote_peer, sizeof(folder->remote_peer), cJSON_GetObjectItemCaseSensitive(item, "remote_peer")) != 0) return -1;
         value = cJSON_GetObjectItemCaseSensitive(item, "paused");
         if (!cJSON_IsBool(value)) return -1;
         folder->paused = cJSON_IsTrue(value);
         value = cJSON_GetObjectItemCaseSensitive(item, "pending_rescan");
         if (!cJSON_IsBool(value)) return -1;
         folder->pending_rescan = cJSON_IsTrue(value);
+        value = cJSON_GetObjectItemCaseSensitive(item, "device_ids");
+        if (!cJSON_IsArray(value) || cJSON_GetArraySize(value) > LS_UI_MAX_FOLDER_DEVICES) return -1;
+        folder->device_count = cJSON_GetArraySize(value);
+        for (int device_index = 0; device_index < folder->device_count; device_index++) {
+            if (ls_copy_json(folder->device_ids[device_index], sizeof(folder->device_ids[device_index]),
+                             cJSON_GetArrayItem(value, device_index)) != 0) return -1;
+        }
         value = cJSON_GetObjectItemCaseSensitive(item, "local_bytes");
         if (!cJSON_IsNumber(value) || value->valuedouble < 0) return -1;
         folder->local_bytes = (long long)value->valuedouble;
@@ -373,6 +417,10 @@ static int ls_parse_status(const cJSON *result, ls_ui_status *status) {
         folder->global_bytes = (long long)value->valuedouble;
         if (ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "local_items"), &folder->local_items) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "global_items"), &folder->global_items) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "need_bytes"), &folder->need_bytes) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "need_items"), &folder->need_items) != 0 ||
+            ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "remote_need_bytes"), &folder->remote_need_bytes) != 0 ||
+            ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "remote_need_items"), &folder->remote_need_items) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_files"), &folder->snapshot_files) != 0 ||
             ls_optional_nonnegative_int(cJSON_GetObjectItemCaseSensitive(item, "snapshot_directories"), &folder->snapshot_directories) != 0 ||
             ls_optional_nonnegative_bytes(cJSON_GetObjectItemCaseSensitive(item, "snapshot_bytes"), &folder->snapshot_bytes) != 0) return -1;
@@ -566,8 +614,10 @@ int ls_ui_folder_action(const char *socket_path, const char *operation,
     if (strcmp(operation, "folder.pause") != 0 &&
         strcmp(operation, "folder.resume") != 0 &&
         strcmp(operation, "folder.rescan") != 0 &&
-        strcmp(operation, "folder.inspect") != 0 && !rename) goto invalid;
+        strcmp(operation, "folder.inspect") != 0 &&
+        strcmp(operation, "folder.stop") != 0 && !rename) goto invalid;
     if (!cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        (strcmp(operation, "folder.stop") == 0 && !cJSON_AddBoolToObject(arguments, "confirmed", true)) ||
         (rename && (!label || !cJSON_AddStringToObject(arguments, "label", label)))) goto invalid;
     return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
 invalid:
@@ -583,18 +633,64 @@ static bool ls_ui_valid_folder_type(const char *folder_type) {
 
 int ls_ui_folder_onboard_plan(const char *socket_path, const char *source_id,
                               const char *kind, const char *folder_type,
+                              const char *const *device_ids, size_t device_count,
                               ls_ui_status *status, char *error, size_t error_size) {
     cJSON *arguments = cJSON_CreateObject();
-    if (!arguments || !source_id || !kind ||
+    cJSON *devices;
+    size_t index;
+    if (!arguments || !source_id || !kind || !device_ids ||
+        device_count == 0 || device_count > LS_UI_MAX_PEERS ||
         (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0) ||
         !ls_ui_valid_folder_type(folder_type) ||
         !cJSON_AddStringToObject(arguments, "source_id", source_id) ||
         !cJSON_AddStringToObject(arguments, "kind", kind) ||
         !cJSON_AddStringToObject(arguments, "folder_type", folder_type)) goto invalid;
+    devices = cJSON_AddArrayToObject(arguments, "device_ids");
+    if (!devices) goto invalid;
+    for (index = 0; index < device_count; index++) {
+        if (!device_ids[index] || !device_ids[index][0] ||
+            !cJSON_AddItemToArray(devices, cJSON_CreateString(device_ids[index]))) goto invalid;
+    }
     return ls_ui_exchange(socket_path, "folder.onboard.plan", arguments, status, error, error_size);
 invalid:
     cJSON_Delete(arguments);
     ls_error(error, error_size, "Could not create folder review request");
+    return -1;
+}
+
+int ls_ui_folder_offer_plan(const char *socket_path, const char *folder_id,
+                            const char *device_id, const char *source_id,
+                            const char *kind, const char *folder_type,
+                            ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id || !device_id || !source_id || !kind ||
+        (strcmp(kind, "saves") != 0 && strcmp(kind, "states") != 0) ||
+        !ls_ui_valid_folder_type(folder_type) ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddStringToObject(arguments, "source_id", source_id) ||
+        !cJSON_AddStringToObject(arguments, "kind", kind) ||
+        !cJSON_AddStringToObject(arguments, "folder_type", folder_type)) goto invalid;
+    return ls_ui_exchange(socket_path, "folder.offer.plan", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder offer review request");
+    return -1;
+}
+
+int ls_ui_folder_offer_action(const char *socket_path, const char *folder_id,
+                              const char *device_id, bool ignored,
+                              ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !folder_id || !device_id ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, ignored ? "folder.offer.ignore" : "folder.offer.restore",
+                          arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder offer action");
     return -1;
 }
 
@@ -660,14 +756,33 @@ invalid:
     return -1;
 }
 
+int ls_ui_folder_membership(const char *socket_path, const char *operation,
+                            const char *folder_id, const char *device_id,
+                            ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !operation || !folder_id || !device_id ||
+        (strcmp(operation, "folder.share") != 0 && strcmp(operation, "folder.unshare") != 0) ||
+        !cJSON_AddStringToObject(arguments, "folder_id", folder_id) ||
+        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create folder sharing request");
+    return -1;
+}
+
 int ls_ui_device_action(const char *socket_path, const char *operation,
                         const char *device_id, const char *name,
                         ls_ui_status *status, char *error, size_t error_size) {
     cJSON *arguments = cJSON_CreateObject();
-    if (!operation || !device_id || !name || !arguments ||
-        (strcmp(operation, "device.add") != 0 && strcmp(operation, "device.rename") != 0) ||
-        !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
-        !cJSON_AddStringToObject(arguments, "name", name)) goto invalid;
+    int remove;
+    if (!operation || !device_id || !arguments) goto invalid;
+    remove = strcmp(operation, "device.remove") == 0;
+    if ((!remove && strcmp(operation, "device.add") != 0 && strcmp(operation, "device.rename") != 0) ||
+        (!remove && !name) || !cJSON_AddStringToObject(arguments, "device_id", device_id) ||
+        (remove && !cJSON_AddBoolToObject(arguments, "confirmed", true)) ||
+        (!remove && !cJSON_AddStringToObject(arguments, "name", name))) goto invalid;
     return ls_ui_exchange(socket_path, operation, arguments, status, error, error_size);
 invalid:
     cJSON_Delete(arguments);
@@ -711,6 +826,23 @@ int ls_ui_diagnostics_export(const char *socket_path, ls_ui_status *status,
                           status, error, error_size);
 }
 
+int ls_ui_storage_cleanup(const char *socket_path, const ls_ui_storage_row *row,
+                          ls_ui_status *status, char *error, size_t error_size) {
+    cJSON *arguments = cJSON_CreateObject();
+    if (!arguments || !row || row->bytes < 0 || row->bytes > 9007199254740991LL ||
+        !cJSON_AddStringToObject(arguments, "card_suffix", row->card_suffix) ||
+        !cJSON_AddStringToObject(arguments, "category", row->category) ||
+        !cJSON_AddStringToObject(arguments, "kind", row->kind) ||
+        !cJSON_AddStringToObject(arguments, "name", row->name) ||
+        !cJSON_AddNumberToObject(arguments, "bytes", (double)row->bytes) ||
+        !cJSON_AddBoolToObject(arguments, "confirmed", true)) goto invalid;
+    return ls_ui_exchange(socket_path, "storage.cleanup", arguments, status, error, error_size);
+invalid:
+    cJSON_Delete(arguments);
+    ls_error(error, error_size, "Could not create retained-history cleanup request");
+    return -1;
+}
+
 bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {
     int index;
     if (!status || !operation) return false;
@@ -718,4 +850,131 @@ bool ls_ui_has_capability(const ls_ui_status *status, const char *operation) {
         if (strcmp(status->capabilities[index], operation) == 0) return true;
     }
     return false;
+}
+
+const char *ls_ui_top_state_label(ls_ui_top_state state) {
+    if (state == LS_UI_UP_TO_DATE) return "Up to date";
+    if (state == LS_UI_SYNCING) return "Syncing";
+    return "Needs attention";
+}
+
+const char *ls_ui_guided_progress_label(const ls_ui_status *status) {
+    ls_ui_status_summary summary = {0};
+    int enrolled_cards = 0;
+    int usable_cards = 0;
+    int configured_peers = 0;
+    int saves_count = 0;
+    int index;
+    if (!status || strcmp(status->controller, "running") != 0) return "Start";
+    for (index = 0; index < status->card_count; index++) {
+        const ls_ui_card *card = &status->cards[index];
+        if (card->enrolled) enrolled_cards++;
+        if (card->enrolled && card->present && card->writable && !card->duplicate_id) usable_cards++;
+    }
+    if (usable_cards == 0) return enrolled_cards > 0 ? "Fix card" : "Enroll card";
+    for (index = 0; index < status->peer_count; index++) {
+        if (!status->peers[index].pending) configured_peers++;
+    }
+    if (configured_peers == 0) return "Connect device";
+    for (index = 0; index < status->folder_count; index++) {
+        const ls_ui_folder *folder = &status->folders[index];
+        if (strcmp(folder->kind, "saves") != 0) continue;
+        saves_count++;
+        if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0)
+            return "Finish first sync";
+    }
+    if (saves_count == 0) return "Set up Saves";
+    if (ls_ui_summarize_status(status, &summary) != 0) return "Check status";
+    if (summary.state == LS_UI_SYNCING) return "Syncing";
+    if (summary.state == LS_UI_NEEDS_ATTENTION) return "Fix issue";
+    return "Complete";
+}
+
+const char *ls_ui_folder_state_label(const ls_ui_folder *folder) {
+    if (!folder || folder->conflict_count > 0 || folder->paused || folder->peer_count <= 0 ||
+        !folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0 ||
+        !folder->remote_state[0] || strcmp(folder->remote_state, "offline") == 0 ||
+        strcmp(folder->remote_state, "paused") == 0 ||
+        strcmp(folder->remote_state, "not-sharing") == 0 ||
+        strcmp(folder->remote_state, "unknown") == 0 ||
+        strcmp(folder->remote_state, "local-only") == 0 || strcmp(folder->state, "error") == 0)
+        return "Needs attention";
+    if (folder->need_bytes > 0 || folder->need_items > 0 || folder->remote_need_bytes > 0 ||
+        folder->remote_need_items > 0 || strcmp(folder->remote_state, "syncing") == 0 ||
+        strcmp(folder->state, "syncing") == 0 || strcmp(folder->state, "scanning") == 0 ||
+        strcmp(folder->state, "sync-preparing") == 0)
+        return "Syncing";
+    return "Up to date";
+}
+
+int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *summary) {
+    int index;
+    const ls_ui_folder *sync_folder = NULL;
+    if (!status || !summary) return -1;
+    memset(summary, 0, sizeof(*summary));
+    summary->state = LS_UI_NEEDS_ATTENTION;
+    if (strcmp(status->controller, "running") != 0 || strcmp(status->upstream_state, "running") != 0) {
+        snprintf(summary->message, sizeof(summary->message), "The Syncthing service is not ready.");
+        return 0;
+    }
+    if (status->issue_count > 0) {
+        snprintf(summary->message, sizeof(summary->message), "%s", status->issues[0].message);
+        return 0;
+    }
+    for (index = 0; index < status->folder_offer_count; index++) {
+        if (!status->folder_offers[index].ignored) {
+            snprintf(summary->message, sizeof(summary->message), "Review the folder offer from %s.",
+                     status->folder_offers[index].device_name);
+            return 0;
+        }
+    }
+    if (status->folder_count == 0) {
+        snprintf(summary->message, sizeof(summary->message), "Finish setting up a Saves folder.");
+        return 0;
+    }
+    for (index = 0; index < status->folder_count; index++) {
+        const ls_ui_folder *folder = &status->folders[index];
+        const char *state = ls_ui_folder_state_label(folder);
+        if (strcmp(state, "Needs attention") == 0) {
+            if (folder->conflict_count > 0)
+                snprintf(summary->message, sizeof(summary->message), "Resolve conflicts in %s.", folder->label);
+            else if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0)
+                snprintf(summary->message, sizeof(summary->message), "Finish first sync for %s.", folder->label);
+            else if (folder->paused)
+                snprintf(summary->message, sizeof(summary->message), "Resume %s when it is safe to sync.", folder->label);
+            else if (folder->peer_count <= 0)
+                snprintf(summary->message, sizeof(summary->message), "Share %s with at least one device.", folder->label);
+            else if (folder->remote_peer[0])
+                snprintf(summary->message, sizeof(summary->message), "%s needs attention for %s (%s).",
+                         folder->remote_peer, folder->label,
+                         folder->remote_state[0] ? folder->remote_state : "completion unknown");
+            else
+                snprintf(summary->message, sizeof(summary->message), "Check %s before syncing.", folder->label);
+            return 0;
+        }
+        if (strcmp(state, "Syncing") == 0) {
+            long long bytes = folder->need_bytes;
+            int items = folder->need_items;
+            if (LLONG_MAX - bytes < folder->remote_need_bytes) bytes = LLONG_MAX;
+            else bytes += folder->remote_need_bytes;
+            if (INT_MAX - items < folder->remote_need_items) items = INT_MAX;
+            else items += folder->remote_need_items;
+            if (LLONG_MAX - summary->need_bytes < bytes) summary->need_bytes = LLONG_MAX;
+            else summary->need_bytes += bytes;
+            if (INT_MAX - summary->need_items < items) summary->need_items = INT_MAX;
+            else summary->need_items += items;
+            if (!sync_folder) sync_folder = folder;
+        }
+    }
+    if (sync_folder) {
+        summary->state = LS_UI_SYNCING;
+        snprintf(summary->message, sizeof(summary->message), "Syncing %s%s%s.", sync_folder->label,
+                 sync_folder->remote_peer[0] ? " with " : "",
+                 sync_folder->remote_peer[0] ? sync_folder->remote_peer : "");
+        return 0;
+    }
+    summary->state = LS_UI_UP_TO_DATE;
+    snprintf(summary->message, sizeof(summary->message),
+             "Every managed folder and selected device is current.");
+    return 0;
 }

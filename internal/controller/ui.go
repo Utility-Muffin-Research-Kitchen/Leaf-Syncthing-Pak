@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,34 @@ type uiUpstream interface {
 	RenameFolder(context.Context, string, string) error
 	AddPeer(context.Context, string, string, []string) error
 	RenamePeer(context.Context, string, string) error
+	RemovePeer(context.Context, string, string) error
+}
+
+func deviceFolderMemberships(folders []syncthing.ConfiguredFolder, deviceID string) []string {
+	result := []string{}
+	for _, folder := range folders {
+		for _, member := range folder.Devices {
+			if member == deviceID {
+				result = append(result, folder.Label)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func recoverPendingDeviceRemoval(ctx context.Context, selfDeviceID string, folders []syncthing.ConfiguredFolder, controls *folderControlStore, upstream uiUpstream) error {
+	deviceID := controls.PendingDeviceRemoval()
+	if deviceID == "" {
+		return nil
+	}
+	if len(deviceFolderMemberships(folders, deviceID)) != 0 {
+		return errors.New("pending device removal still has managed folder memberships")
+	}
+	if err := upstream.RemovePeer(ctx, deviceID, selfDeviceID); err != nil {
+		return err
+	}
+	return controls.CompleteDeviceRemoval(deviceID)
 }
 
 func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol.Status {
@@ -31,6 +60,12 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 		status.Folders[index].GlobalBytes = upstream.GlobalBytes
 		status.Folders[index].LocalItems = upstream.LocalItems
 		status.Folders[index].GlobalItems = upstream.GlobalItems
+		status.Folders[index].NeedBytes = upstream.NeedBytes
+		status.Folders[index].NeedItems = upstream.NeedItems
+		status.Folders[index].RemoteState = upstream.RemoteState
+		status.Folders[index].RemotePeer = upstream.RemotePeer
+		status.Folders[index].RemoteNeedBytes = upstream.RemoteBytes
+		status.Folders[index].RemoteNeedItems = upstream.RemoteItems
 		status.Folders[index].LastSync = upstream.LastActivity
 		if len(status.Folders[index].Issues) == 0 {
 			if status.Folders[index].Paused {
@@ -53,10 +88,28 @@ func applyLiveStatus(status uicontrol.Status, live syncthing.UIStatus) uicontrol
 			Introducer: peer.Introducer, IntroducedBy: peer.IntroducedBy, Pending: peer.Pending,
 		})
 	}
+	status.FolderOffers = make([]uicontrol.FolderOfferStatus, 0, len(live.FolderOffers))
+	for _, offer := range live.FolderOffers {
+		status.FolderOffers = append(status.FolderOffers, uicontrol.FolderOfferStatus{
+			FolderID: offer.FolderID, Label: offer.Label, DeviceID: offer.DeviceID,
+			DeviceIDSuffix: deviceIDSuffix(offer.DeviceID), DeviceName: offer.DeviceName,
+			OfferedAt: offer.OfferedAt, ReceiveEncrypted: offer.ReceiveEncrypted,
+			RemoteEncrypted: offer.RemoteEncrypted,
+		})
+	}
 	status.Transfer = &uicontrol.TransferStatus{
 		State: live.Transfer.State, LocalBytes: live.Transfer.LocalBytes,
 		GlobalBytes: live.Transfer.GlobalBytes, NeedBytes: live.Transfer.NeedBytes,
 		InBytes: live.Transfer.InBytes, OutBytes: live.Transfer.OutBytes,
+	}
+	return status
+}
+
+func applyIgnoredFolderOffers(status uicontrol.Status, ignored map[string]bool) uicontrol.Status {
+	for index := range status.FolderOffers {
+		status.FolderOffers[index].Ignored = ignored[folderOfferKey(
+			status.FolderOffers[index].FolderID, status.FolderOffers[index].DeviceID,
+		)]
 	}
 	return status
 }
@@ -77,6 +130,24 @@ func findFolder(status uicontrol.Status, folderID string) (*uicontrol.FolderStat
 		}
 	}
 	return nil, false
+}
+
+func findFolderOffer(status uicontrol.Status, folderID, deviceID string) (uicontrol.FolderOfferStatus, bool) {
+	for _, offer := range status.FolderOffers {
+		if offer.FolderID == folderID && offer.DeviceID == deviceID {
+			return offer, true
+		}
+	}
+	return uicontrol.FolderOfferStatus{}, false
+}
+
+func findPeer(status uicontrol.Status, deviceID string) (uicontrol.PeerStatus, bool) {
+	for _, peer := range status.Peers {
+		if peer.ID == deviceID {
+			return peer, true
+		}
+	}
+	return uicontrol.PeerStatus{}, false
 }
 
 func folderSafeForAction(folder *uicontrol.FolderStatus) bool {

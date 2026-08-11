@@ -55,7 +55,8 @@ int main(void) {
             "\"label\":\"Leaf Saves — Primary\",\"path\":\"/mnt/sdcard/Saves\","
             "\"file_count\":3,\"directory_count\":2,\"content_bytes\":4096,"
             "\"available_bytes\":8192,\"snapshot_possible\":true,\"peer_count\":1,"
-            "\"states_warning\":false,\"expires_at\":\"2026-08-08T12:05:00Z\"},"
+            "\"states_warning\":false,\"join_existing\":true,\"offer_device_id\":\"PEER\","
+            "\"expires_at\":\"2026-08-08T12:05:00Z\"},"
         "\"cards\":[{\"id\":\"00112233445566778899aabbccddeeff\",\"source_id\":\"primary\","
             "\"id_suffix\":\"ccddeeff\",\"slot\":\"Primary\",\"root\":\"/mnt/sdcard\","
             "\"state\":\"enrolled\",\"enrolled\":true,\"present\":true,\"writable\":true,"
@@ -64,6 +65,9 @@ int main(void) {
             "\"card_id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"saves\",\"path\":\"/mnt/sdcard/Saves\","
             "\"type\":\"sendreceive\",\"state\":\"idle\",\"paused\":false,\"pause_reasons\":[],"
             "\"pending_rescan\":false,\"local_bytes\":10,\"global_bytes\":10,\"local_items\":3,\"global_items\":4,\"peer_count\":1,"
+            "\"need_bytes\":5,\"need_items\":1,\"remote_state\":\"syncing\",\"remote_peer\":\"Laptop\","
+            "\"remote_need_bytes\":7,\"remote_need_items\":2,"
+            "\"device_ids\":[\"LOCAL\",\"PEER\"],"
             "\"last_sync\":\"2026-08-08T12:00:00Z\",\"versioning\":\"simple\",\"conflict_count\":1,"
             "\"first_sync_state\":\"ready\",\"snapshot_name\":\"first-sync-20260808T120000Z\","
             "\"snapshot_files\":3,\"snapshot_directories\":2,\"snapshot_bytes\":4096,"
@@ -72,6 +76,9 @@ int main(void) {
         "\"peers\":[{\"id\":\"PEER\",\"id_suffix\":\"PEER\","
             "\"name\":\"Laptop\",\"state\":\"connected\",\"connection\":\"direct\","
             "\"address\":\"tcp://192.0.2.2:22000\",\"paused\":false,\"introducer\":false,\"pending\":false}],"
+        "\"folder_offers\":[{\"folder_id\":\"retro-saves\",\"label\":\"Retro Saves\","
+            "\"device_id\":\"PEER\",\"device_id_suffix\":\"PEER\",\"device_name\":\"Laptop\","
+            "\"offered_at\":\"2026-08-09T12:34:56Z\",\"receive_encrypted\":false,\"remote_encrypted\":false,\"ignored\":true}],"
         "\"issues\":[],\"capabilities\":[\"log.level.set\",\"diagnostics.export\"]}}";
     char *payload = read_fixture("status-get-response.json", &size);
     assert(ls_ui_parse_response(payload, size, "fixture-status", &status,
@@ -80,6 +87,8 @@ int main(void) {
     assert(strcmp(status.upstream_version, "v2.1.2") == 0);
     assert(status.card_count == 1 && !status.cards[0].present);
     assert(status.folder_count == 1 && status.folders[0].paused);
+    assert(status.folder_offer_count == 1 &&
+           strcmp(status.folder_offers[0].folder_id, "retro-saves") == 0);
     assert(status.issue_count == 1);
     assert(ls_ui_has_capability(&status, "card.enroll"));
     assert(ls_ui_parse_response(payload, size, "wrong-id", &status,
@@ -121,13 +130,68 @@ int main(void) {
     assert(strcmp(status.diagnostics_path,
                   "/mnt/sdcard/Logs/leaf-syncthing-diagnostics.json") == 0);
     assert(status.peer_count == 1 && strcmp(status.peers[0].connection, "direct") == 0);
+    assert(status.folder_offer_count == 1 &&
+           strcmp(status.folder_offers[0].device_name, "Laptop") == 0 && status.folder_offers[0].ignored);
     assert(status.onboarding_present && status.onboarding.snapshot_possible);
+    assert(status.onboarding.join_existing && strcmp(status.onboarding.offer_device_id, "PEER") == 0);
     assert(status.card_count == 1 && strcmp(status.cards[0].source_id, "primary") == 0);
     assert(status.onboarding.file_count == 3 && status.onboarding.available_bytes == 8192);
     assert(status.folder_count == 1 && status.folders[0].local_items == 3 &&
            status.folders[0].global_items == 4);
+    assert(status.folders[0].need_bytes == 5 && status.folders[0].need_items == 1);
+    assert(strcmp(status.folders[0].remote_state, "syncing") == 0 &&
+           strcmp(status.folders[0].remote_peer, "Laptop") == 0 &&
+           status.folders[0].remote_need_bytes == 7 && status.folders[0].remote_need_items == 2);
+    assert(status.folders[0].device_count == 2 &&
+           strcmp(status.folders[0].device_ids[1], "PEER") == 0);
     assert(strcmp(status.folders[0].first_sync_state, "ready") == 0 &&
            status.folders[0].snapshot_files == 3 && status.folders[0].snapshot_bytes == 4096);
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Finish first sync") == 0);
+    status.cards[0].present = false;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Fix card") == 0);
+    status.cards[0].enrolled = false;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Enroll card") == 0);
+    status.cards[0].enrolled = true;
+    status.cards[0].present = true;
+    status.peers[0].pending = true;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Connect device") == 0);
+    status.peers[0].pending = false;
+    status.folder_count = 0;
+    assert(strcmp(ls_ui_guided_progress_label(&status), "Set up Saves") == 0);
+    status.folder_count = 1;
+    assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Needs attention") == 0);
+    {
+        ls_ui_status_summary summary;
+        assert(ls_ui_summarize_status(&status, &summary) == 0);
+        assert(summary.state == LS_UI_NEEDS_ATTENTION);
+        assert(strcmp(ls_ui_top_state_label(summary.state), "Needs attention") == 0);
+
+        status.issue_count = 0;
+        status.folder_offer_count = 0;
+        status.folders[0].conflict_count = 0;
+        snprintf(status.folders[0].first_sync_state, sizeof(status.folders[0].first_sync_state), "complete");
+        status.folders[0].need_bytes = 0;
+        status.folders[0].need_items = 0;
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "syncing");
+        status.folders[0].remote_need_bytes = 7;
+        status.folders[0].remote_need_items = 2;
+        assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Syncing") == 0);
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_SYNCING &&
+               summary.need_bytes == 7 && summary.need_items == 2);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Syncing") == 0);
+
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "current");
+        status.folders[0].remote_need_bytes = 0;
+        status.folders[0].remote_need_items = 0;
+        assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Up to date") == 0);
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_UP_TO_DATE);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Complete") == 0);
+
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "offline");
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_NEEDS_ATTENTION &&
+               strstr(summary.message, "Laptop") != NULL);
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Fix issue") == 0);
+    }
     puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");
     return 0;
 }

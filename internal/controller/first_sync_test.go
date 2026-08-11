@@ -67,7 +67,7 @@ func newFirstSyncFixture(t *testing.T, folderType string) firstSyncFixture {
 		folder.VersioningFSPath = filepath.Join(source.UserdataPath, leaf.AppStateName, "versions", "saves")
 	}
 	controlPath := filepath.Join(t.TempDir(), folderControlStateName)
-	controls, err := newFolderControlStore(controlPath, []syncthing.ConfiguredFolder{folder})
+	controls, err := newFolderControlStore(controlPath, []syncthing.ConfiguredFolder{folder}, []cards.Card{card})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestFirstSyncPrepareCopiesHashedSnapshotAndCompletesDurably(t *testing.T) {
 		t.Fatalf("completion marker = %+v, ok=%v, err=%v", marker, ok, err)
 	}
 
-	reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder})
+	reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder}, []cards.Card{fixture.card})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestFirstSyncSnapshotCrashRecoveryMatrix(t *testing.T) {
 			if _, err := manager.Prepare(context.Background(), fixture.folder, fixture.card, fixture.controls); err == nil {
 				t.Fatal("fault did not interrupt prepare")
 			}
-			reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder})
+			reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder}, []cards.Card{fixture.card})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -280,7 +280,7 @@ func TestFirstSyncCompletionCrashRecoveryMatrix(t *testing.T) {
 				t.Fatal("fault did not interrupt completion")
 			}
 
-			reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder})
+			reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder}, []cards.Card{fixture.card})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -400,7 +400,7 @@ func TestFirstSyncRecoveryRefusesToClearBeforeRecoverySyncfs(t *testing.T) {
 	if err := manager.Complete(fixture.folder, fixture.card, fixture.controls, true); err == nil {
 		t.Fatal("completion fault did not fire")
 	}
-	reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder})
+	reloadedControls, err := newFolderControlStore(fixture.controlPath, []syncthing.ConfiguredFolder{fixture.folder}, []cards.Card{fixture.card})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +434,34 @@ func TestFirstSyncRecoveryDoesNotRewriteCompletionWhileCardUnavailable(t *testin
 	}
 	if !fixture.controls.Snapshot()[fixture.folder.ID].FirstSync {
 		t.Fatal("present card without its completion marker remained unprotected")
+	}
+}
+
+func TestFirstSyncUsesDurableBindingForExternalFolderID(t *testing.T) {
+	fixture := newFirstSyncFixture(t, "sendonly")
+	external := fixture.folder
+	external.ID = "retro-saves"
+	if err := fixture.controls.Remove(fixture.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.controls.Add(external, fixture.card); err != nil {
+		t.Fatal(err)
+	}
+	state := fixture.controls.Snapshot()
+	if card, ok := cardForConfiguredFolder(external, []cards.Card{fixture.card}, state); !ok || card.Identity.ID != fixture.card.Identity.ID {
+		t.Fatalf("external folder card = %+v, ok=%v", card, ok)
+	}
+	manager, err := newFirstSyncManager([]syncthing.ConfiguredFolder{external}, []cards.Card{fixture.card}, fixture.controls, fixedFirstSyncOptions(nil, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Complete(external, fixture.card, fixture.controls, true); err != nil {
+		t.Fatal(err)
+	}
+	epoch := fixture.controls.Snapshot()[external.ID].FirstSyncEpoch
+	marker, ok, err := readFirstSyncMarker(fixture.card, external, epoch)
+	if err != nil || !ok || marker.FolderID != external.ID {
+		t.Fatalf("external completion marker = %+v, ok=%v, err=%v", marker, ok, err)
 	}
 }
 
