@@ -1,6 +1,6 @@
 # B4c multi-device implementation checkpoint
 
-**Status:** Implementation complete; Android/non-Leaf handheld qualification pending
+**Status:** Implementation and interoperability qualification complete; B5 handoff pending
 
 **Date:** 2026-08-11
 
@@ -9,12 +9,13 @@
 `agent/syncthing-check-before-stop`
 
 **Devices:** Two physical MLP1 units, two enrolled physical VFAT cards on the
-first unit, and an unmodified standard Linux Syncthing peer
+first unit, an unmodified standard Linux Syncthing peer, and an Android 14
+handheld running Syncthing-Fork 2.1.3.0
 
 This checkpoint follows
 `umrk-workspace/plans/leaf-syncthing/phases/phase-b4c-multi-device-interoperability.md`.
-It records implemented and directly verified behavior without claiming the
-remaining Android/non-Leaf handheld qualification or B5 documentation handoff.
+It records implemented and directly verified behavior through the complete
+required client matrix. The public setup and recovery guide remains B5 work.
 
 ## Implemented result
 
@@ -236,11 +237,53 @@ and its live Saves/States trees empty. A 19-file post-Join evidence and rollback
 copy remains under the second card's qualification directory. Only the exact
 temporary Linux qualification folder was removed from the standard peer.
 
-## Remaining qualification
+## Android handheld evidence
 
-- Run the Android or non-Leaf handheld journey with a real client and real
-  bidirectional transfer data. Linux-first, Leaf-first, later-peer, multi-peer,
-  and second-Leaf paths now have physical evidence.
+A fresh Syncthing-Fork 2.1.3.0 install on a physical Android 14 handheld was
+driven through its actual 640x480 UI over wireless ADB. First-run onboarding
+granted background and notification permission, left optional location access
+unrequested, generated a new identity, and started Syncthing under the normal
+unmetered-Wi-Fi run conditions.
+
+The Android client discovered the first MLP1 through standard local discovery
+and explicitly added it without manual addresses. Leaf exposed the Android
+device as pending, accepted it by device ID, and shared only the existing
+`ra-saves` folder. `ra-states` retained only its original Linux peer. Android's
+folder-offer notification named the offering Leaf and folder; opening it led to
+the normal Create Folder review. The user selected
+`/storage/emulated/0/LeafQualification/ra-saves` through Android's Storage
+Access Framework, retained **Send & Receive**, and explicitly included the
+Leaf device. The folder reached **Up to Date** while the first MLP1 retained
+both the Android local peer and the direct Linux peer.
+
+Two 91-byte fixtures then qualified the real data path in opposite directions:
+
+| Direction | SHA-256 |
+| --- | --- |
+| MLP1 to Android | `8152219b167db5de1c54bc615389799161dd8b382aa9edfa28acbe2c7b0afbbf` |
+| Android to MLP1 | `9d85974dd7881c4fb20aa5b4dba016e76786de2f63e08a2a17f954a1aa2505bf` |
+
+Each digest matched at its source and destination. Leaf reported 182 local and
+global bytes, zero needed bytes, two selected peers, idle/current, and no
+issues. Syncthing-Fork independently displayed two files, 182 local/global
+bytes, and **Up to Date**.
+
+Using Syncthing-Fork's foreground controls, a forced stop made Leaf truthfully
+report the Android peer offline and the multi-peer folder not current. A forced
+start reconnected locally and returned the same folder to current without
+losing configuration or data. Returning to **Follow run conditions** left the
+service running under its ordinary Wi-Fi policy.
+
+Android's standard Remove Folder action removed the Syncthing binding while
+both fixture files remained byte-identical in the live directory. Cleanup then
+removed the folder and peer from each client and deleted only the isolated test
+trees. The first MLP1 returned to its original Linux-only `ra-saves` and
+`ra-states`, both idle/current with zero bytes and no issues; the unrelated
+second-card `Stella 2014` tree was untouched. Android retained its installed
+app, identity, and onboarding permissions but no folders or devices.
+
+## Remaining handoff
+
 - Exercise the public B5 setup, add/remove-later, conflict-recovery, and
   per-platform path instructions with representative users and clients.
 - Stamp and verify only the eventual B5 release artifacts; this checkpoint
