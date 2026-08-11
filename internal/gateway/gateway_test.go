@@ -28,7 +28,10 @@ func testManager(t *testing.T, now *time.Time) *Manager {
 	upstream := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body := `ok`
 		contentType := "text/plain"
-		if request.URL.Path == "/rest/config" {
+		if request.URL.Path == "/" {
+			body = `<!doctype html><html><body><main>Syncthing</main></body></html>`
+			contentType = "text/html"
+		} else if request.URL.Path == "/rest/config" {
 			body = `{"gui":{"apiKey":"upstream-secret","password":"password-secret"},"devices":[]}`
 			contentType = "application/json"
 		}
@@ -64,6 +67,10 @@ func bootstrapCSRF(t *testing.T, client *http.Client, base string) string {
 	match := regexp.MustCompile(`const csrf="([^"]+)"`).FindSubmatch(payload)
 	if response.StatusCode != http.StatusOK || len(match) != 2 {
 		t.Fatalf("bootstrap = %d %s", response.StatusCode, payload)
+	}
+	if !bytes.Contains(payload, []byte("Read-only status view")) ||
+		!bytes.Contains(payload, []byte("Make changes on the handheld")) {
+		t.Fatalf("bootstrap omitted read-only notice: %s", payload)
 	}
 	return string(match[1])
 }
@@ -144,6 +151,14 @@ func TestPairingProxyLogoutAndReadOnlyBoundary(t *testing.T) {
 		}
 		return response
 	}
+	root := get("/")
+	rootPayload, _ := io.ReadAll(root.Body)
+	_ = root.Body.Close()
+	if root.StatusCode != http.StatusOK ||
+		bytes.Count(rootPayload, []byte(`id="leaf-read-only-banner"`)) != 1 ||
+		!bytes.Contains(rootPayload, []byte("Read-only Leaf status view. Make changes on the handheld.")) {
+		t.Fatalf("read-only root = %d %s", root.StatusCode, rootPayload)
+	}
 	config := get("/rest/config")
 	configPayload, _ := io.ReadAll(config.Body)
 	_ = config.Body.Close()
@@ -163,8 +178,10 @@ func TestPairingProxyLogoutAndReadOnlyBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if post.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("upstream POST status = %d", post.StatusCode)
+	postPayload, _ := io.ReadAll(post.Body)
+	if post.StatusCode != http.StatusMethodNotAllowed ||
+		!bytes.Contains(postPayload, []byte("read-only")) {
+		t.Fatalf("upstream POST = %d %s", post.StatusCode, postPayload)
 	}
 	_ = post.Body.Close()
 

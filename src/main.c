@@ -25,6 +25,7 @@ typedef struct {
     char controller_binary[1024];
     ls_ctl1_status service;
     ls_ui_status status;
+    int service_control_available;
     int controller_available;
     int exit_requested;
     char error[256];
@@ -93,10 +94,21 @@ static int ls_load_paths(ls_app *app) {
 
 static void ls_refresh(ls_app *app) {
     app->error[0] = '\0';
-    (void)ls_ctl1_get(app->daemon_socket, LS_SERVICE_ID, &app->service);
-    app->controller_available =
-        ls_ui_status_get(app->control_socket, &app->status,
-                         app->error, sizeof(app->error)) == 0;
+    app->service_control_available =
+        ls_ctl1_get(app->daemon_socket, LS_SERVICE_ID, &app->service) == 0;
+    app->controller_available = 0;
+    if (!app->service_control_available) {
+        snprintf(app->error, sizeof(app->error), "%s", "Leaf service control is unavailable");
+        return;
+    }
+    if (!ls_ctl1_should_query_controller(&app->service, true)) return;
+    if (ls_ui_status_get(app->control_socket, &app->status,
+                         app->error, sizeof(app->error)) == 0) {
+        app->controller_available = 1;
+    } else {
+        snprintf(app->error, sizeof(app->error), "%s",
+                 "Syncthing controls are still starting");
+    }
 }
 
 static void ls_format_bytes(long long bytes, char *target, size_t size) {
@@ -1894,6 +1906,7 @@ static void ls_show_gateway(ls_app *app) {
         int qr_y;
         int text_width;
         int cursor_y = content.y + margin;
+        char fingerprint[128];
         char trusted[64];
         uint32_t now = SDL_GetTicks();
 
@@ -1926,13 +1939,13 @@ static void ls_show_gateway(ls_app *app) {
             } else if (event.button == CAT_BTN_X) {
                 if (app->status.gateway_trusted_browsers == 0) {
                     ls_message("Pair at least one browser before starting the 15-minute extension.");
-                } else if (ls_confirm("Keep the read-only web interface open for 15 minutes after leaving this screen? New pairing will be disabled.", "Extend")) {
+                } else if (ls_confirm("Keep the read-only web view open for 15 minutes after leaving this screen? New pairing will be disabled.", "Extend")) {
                     if (ls_ui_gateway_action(app->control_socket, "gateway.extend", true,
                                              &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
                     return;
                 }
             } else if (event.button == CAT_BTN_Y &&
-                       ls_confirm("Revoke every trusted browser and close the web interface now?", "Revoke")) {
+                       ls_confirm("Revoke every trusted browser and close the read-only web view now?", "Revoke")) {
                 if (ls_ui_gateway_action(app->control_socket, "gateway.revoke-all", true,
                                          &app->status, app->error, sizeof(app->error)) != 0) ls_message(app->error);
                 return;
@@ -1948,7 +1961,12 @@ static void ls_show_gateway(ls_app *app) {
         }
 
         cat_draw_background();
-        cat_draw_screen_title("Web Interface", NULL);
+        cat_draw_screen_title("Read-only web view", NULL);
+        cat_draw_text_wrapped(small, "Status only—make changes on the handheld.",
+                              margin, cursor_y, text_width,
+                              theme->emphasis, CAT_ALIGN_LEFT);
+        cursor_y += cat_measure_wrapped_text_height(
+            small, "Status only—make changes on the handheld.", text_width) + margin;
         cat_draw_text(small, "HTTPS address", margin, cursor_y, theme->hint);
         cursor_y += TTF_FontHeight(small) + 2;
         cat_draw_text_wrapped(small, app->status.gateway_url, margin, cursor_y,
@@ -1964,7 +1982,16 @@ static void ls_show_gateway(ls_app *app) {
         cursor_y += TTF_FontHeight(small) + margin;
         cat_draw_text(small, "Certificate fingerprint", margin, cursor_y, theme->hint);
         cursor_y += TTF_FontHeight(small) + 2;
-        cat_draw_text_wrapped(small, app->status.gateway_fingerprint, margin, cursor_y,
+        if (strlen(app->status.gateway_fingerprint) > 66) {
+            snprintf(fingerprint, sizeof(fingerprint), "%.32s\n%.32s\n%s",
+                     app->status.gateway_fingerprint,
+                     app->status.gateway_fingerprint + 33,
+                     app->status.gateway_fingerprint + 66);
+        } else {
+            snprintf(fingerprint, sizeof(fingerprint), "%s",
+                     app->status.gateway_fingerprint);
+        }
+        cat_draw_text_wrapped(small, fingerprint, margin, cursor_y,
                               text_width, theme->text, CAT_ALIGN_LEFT);
 
         if (module_size > 0 && qr_size > 0) {
@@ -1984,6 +2011,7 @@ static void ls_show_gateway(ls_app *app) {
             }
         }
         if (cat_hints_enabled_from_env()) cat_draw_footer(footer, 4);
+        cat_request_frame_in(1000);
         cat_present();
     }
 }
@@ -2149,16 +2177,68 @@ static void ls_guided_setup(ls_app *app) {
         ls_add_folder_kind(app, "states");
 }
 
+typedef enum {
+    LS_OVERVIEW_SERVICE = 0,
+    LS_OVERVIEW_AUTOSTART,
+    LS_OVERVIEW_SERVICE_ACTION,
+    LS_OVERVIEW_GUIDED,
+    LS_OVERVIEW_RECOVERY,
+    LS_OVERVIEW_STATUS,
+    LS_OVERVIEW_CARDS,
+    LS_OVERVIEW_FOLDERS,
+    LS_OVERVIEW_DEVICES,
+    LS_OVERVIEW_NETWORK,
+    LS_OVERVIEW_WEB,
+    LS_OVERVIEW_SETTINGS,
+    LS_OVERVIEW_ISSUES,
+} ls_overview_row;
+
+static void ls_show_service_detail(const ls_app *app) {
+    const char *state;
+    if (!app->service_control_available) {
+        ls_message("Leaf service control is unavailable. Exit Syncthing and restart the launcher.");
+        return;
+    }
+    if (!app->service.found) {
+        ls_message("The Syncthing service is not installed in this Leaf runtime.");
+        return;
+    }
+    if (app->controller_available) {
+        char detail[512];
+        snprintf(detail, sizeof(detail), "Controller: %s\nSyncthing: %s\nVersion: %s%s",
+                 app->status.controller, app->status.upstream_state,
+                 app->status.upstream_version,
+                 app->status.game_active ? "\nStopped while you play" : "");
+        ls_message(detail);
+        return;
+    }
+    state = app->service.effective_state;
+    if (strcmp(state, "disabled") == 0 || strcmp(state, "stopped") == 0) {
+        ls_message("Syncthing is stopped. Choose Run Syncthing to view sync status and manage folders or devices.");
+    } else if (strcmp(state, "starting") == 0 || strcmp(state, "running") == 0) {
+        ls_message("Syncthing is starting. This screen will update automatically when its controls are ready.");
+    } else if (strcmp(state, "stopping") == 0) {
+        ls_message("Syncthing is stopping. This screen will update automatically when it has stopped.");
+    } else if (strcmp(state, "backoff") == 0) {
+        ls_message("Syncthing is retrying after a failure. Choose Stop Syncthing to stop retrying, or wait for this screen to update.");
+    } else if (strcmp(state, "failed") == 0) {
+        ls_message("Syncthing could not stay running. Choose Run Syncthing to try again. If it fails again, open Leaf Settings > Services.");
+    } else {
+        ls_message("Syncthing needs attention. Open Leaf Settings > Services for details.");
+    }
+}
+
 static void ls_run_overview(ls_app *app) {
-    int focus = 0;
+    ls_overview_row focused_row = LS_OVERVIEW_SERVICE;
     int scroll = 0;
     for (;;) {
         cat_option enabled_options[] = {{.label = "Off", .value = "Off"},
                                         {.label = "On", .value = "On"}};
         cat_option value_options[9];
         cat_options_item items[12];
+        ls_overview_row row_ids[12];
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Exit"},
-                                    {.button = CAT_BTN_A, .label = "Choose", .is_confirm = true}};
+                                    {.button = CAT_BTN_A, .label = "Select", .is_confirm = true}};
         cat_options_list_opts options = {0};
         cat_options_list_result result = {0};
         char service_value[64];
@@ -2170,27 +2250,46 @@ static void ls_run_overview(ls_app *app) {
         char setup_value[32];
         ls_ui_status_summary summary = {0};
         int item_count = 0;
+        int initial_focus = 0;
         int action;
         int recovery_pending;
+        const char *service_action;
+        const char *service_operation;
         ls_refresh(app);
         recovery_pending = app->controller_available &&
                            strcmp(app->status.controller, "recovery-pending") == 0;
         snprintf(service_value, sizeof(service_value), "%s",
-                 app->service.found ? app->service.effective_state : "unavailable");
+                 ls_ctl1_state_label(&app->service,
+                                     app->service_control_available,
+                                     app->controller_available));
+        service_action = ls_ctl1_action_label(&app->service,
+                                              app->service_control_available);
+        service_operation = ls_ctl1_action_operation(&app->service,
+                                                     app->service_control_available);
         memset(items, 0, sizeof(items));
         memset(value_options, 0, sizeof(value_options));
         value_options[0] = (cat_option){.label = service_value, .value = service_value};
+        row_ids[item_count] = LS_OVERVIEW_SERVICE;
         items[item_count++] = (cat_options_item){
             .label = "Service", .type = CAT_OPT_CLICKABLE,
             .options = &value_options[0], .option_count = 1};
-        items[item_count++] = (cat_options_item){
-            .label = "Start with Leaf", .type = CAT_OPT_STANDARD,
-            .options = enabled_options, .option_count = 2,
-            .selected_option = app->service.desired_enabled ? 1 : 0};
-        items[item_count++] = (cat_options_item){
-            .label = ls_service_running(&app->service) ? "Stop" : "Run",
-            .type = CAT_OPT_CLICKABLE};
-        snprintf(setup_value, sizeof(setup_value), "%s", "Start");
+        if (app->service_control_available && app->service.found) {
+            row_ids[item_count] = LS_OVERVIEW_AUTOSTART;
+            items[item_count++] = (cat_options_item){
+                .label = "Start with Leaf", .type = CAT_OPT_STANDARD,
+                .options = enabled_options, .option_count = 2,
+                .selected_option = app->service.desired_enabled ? 1 : 0};
+        }
+        if (service_action) {
+            row_ids[item_count] = LS_OVERVIEW_SERVICE_ACTION;
+            items[item_count++] = (cat_options_item){
+                .label = service_action, .type = CAT_OPT_CLICKABLE};
+        }
+        snprintf(setup_value, sizeof(setup_value), "%s",
+                 service_operation && strcmp(service_operation, "run") == 0
+                     ? "Starts service"
+                     : (app->service_control_available && app->service.found
+                            ? "Waiting" : "Unavailable"));
         if (app->controller_available) {
             (void)ls_ui_summarize_status(&app->status, &summary);
             snprintf(setup_value, sizeof(setup_value), "%s", ls_ui_guided_progress_label(&app->status));
@@ -2230,28 +2329,44 @@ static void ls_run_overview(ls_app *app) {
         } else {
             value_options[8] = (cat_option){.label = setup_value, .value = setup_value};
         }
+        row_ids[item_count] = LS_OVERVIEW_GUIDED;
         items[item_count++] = (cat_options_item){.label = "Guided setup", .type = CAT_OPT_CLICKABLE,
             .options = &value_options[8], .option_count = 1};
         if (app->controller_available) {
             if (recovery_pending) {
+                row_ids[item_count] = LS_OVERVIEW_RECOVERY;
                 items[item_count++] = (cat_options_item){.label = "Recovery issue", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[6], .option_count = 1};
             } else {
+                row_ids[item_count] = LS_OVERVIEW_STATUS;
                 items[item_count++] = (cat_options_item){.label = "Status", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[4], .option_count = 1};
+                row_ids[item_count] = LS_OVERVIEW_CARDS;
                 items[item_count++] = (cat_options_item){.label = "Cards", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[1], .option_count = 1};
+                row_ids[item_count] = LS_OVERVIEW_FOLDERS;
                 items[item_count++] = (cat_options_item){.label = "Folders", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[2], .option_count = 1};
+                row_ids[item_count] = LS_OVERVIEW_DEVICES;
                 items[item_count++] = (cat_options_item){.label = "Devices", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[3], .option_count = 1};
+                row_ids[item_count] = LS_OVERVIEW_NETWORK;
                 items[item_count++] = (cat_options_item){.label = "Network", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[5], .option_count = 1};
-                items[item_count++] = (cat_options_item){.label = "Web Interface", .type = CAT_OPT_CLICKABLE,
+                row_ids[item_count] = LS_OVERVIEW_WEB;
+                items[item_count++] = (cat_options_item){.label = "Read-only web view", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[7], .option_count = 1};
+                row_ids[item_count] = LS_OVERVIEW_SETTINGS;
                 items[item_count++] = (cat_options_item){.label = "Settings & Recovery", .type = CAT_OPT_CLICKABLE};
+                row_ids[item_count] = LS_OVERVIEW_ISSUES;
                 items[item_count++] = (cat_options_item){.label = "Issues", .type = CAT_OPT_CLICKABLE,
                     .options = &value_options[6], .option_count = 1};
+            }
+        }
+        for (int index = 0; index < item_count; index++) {
+            if (row_ids[index] == focused_row) {
+                initial_focus = index;
+                break;
             }
         }
         options.title = "Syncthing";
@@ -2259,40 +2374,35 @@ static void ls_run_overview(ls_app *app) {
         options.item_count = item_count;
         options.footer = footer;
         options.footer_count = cat_hints_enabled_from_env() ? 2 : 0;
-        options.initial_selected_index = focus < item_count ? focus : 0;
+        options.initial_selected_index = initial_focus;
         options.visible_start_index = scroll;
         options.return_on_option_change = true;
+        options.refresh_interval_ms = 1000;
         action = cat_options_list(&options, &result);
-        focus = result.focused_index;
+        if (result.focused_index >= 0 && result.focused_index < item_count)
+            focused_row = row_ids[result.focused_index];
         scroll = result.visible_start_index;
         if (action == CAT_CANCELLED || result.action == CAT_ACTION_BACK) return;
-        if (result.action == CAT_ACTION_OPTION_CHANGED && focus == 1) {
-            const char *operation = items[1].selected_option ? "enable" : "disable";
+        if (result.action == CAT_ACTION_REFRESH) continue;
+        if (result.action == CAT_ACTION_OPTION_CHANGED &&
+            focused_row == LS_OVERVIEW_AUTOSTART) {
+            const char *operation = items[result.focused_index].selected_option
+                ? "enable" : "disable";
             if (ls_ctl1_action(app->daemon_socket, operation, LS_SERVICE_ID,
                                app->error, sizeof(app->error)) != 0) ls_message(app->error);
             continue;
         }
         if (result.action != CAT_ACTION_SELECTED) continue;
-        if (focus == 0) {
-            if (app->controller_available) {
-                char detail[512];
-                snprintf(detail, sizeof(detail), "Controller: %s\nSyncthing: %s\nVersion: %s%s",
-                         app->status.controller, app->status.upstream_state,
-                         app->status.upstream_version,
-                         app->status.game_active ? "\nStopped while you play" : "");
-                ls_message(detail);
-            } else {
-                ls_message(app->error[0] ? app->error : "Syncthing controller is unavailable");
-            }
-        } else if (focus == 2) {
-            const char *operation = ls_service_running(&app->service) ? "stop" : "run";
-            if (ls_ctl1_action(app->daemon_socket, operation, LS_SERVICE_ID,
+        if (focused_row == LS_OVERVIEW_SERVICE) {
+            ls_show_service_detail(app);
+        } else if (focused_row == LS_OVERVIEW_SERVICE_ACTION && service_operation) {
+            if (ls_ctl1_action(app->daemon_socket, service_operation, LS_SERVICE_ID,
                                app->error, sizeof(app->error)) != 0) ls_message(app->error);
-        } else if (focus == 3) {
+        } else if (focused_row == LS_OVERVIEW_GUIDED) {
             ls_guided_setup(app);
-        } else if (recovery_pending && focus == 4) {
+        } else if (focused_row == LS_OVERVIEW_RECOVERY) {
             ls_show_issues(app);
-        } else if (app->controller_available && focus == 4) {
+        } else if (focused_row == LS_OVERVIEW_STATUS) {
             char local[32], global[32], needed[32], received[32], sent[32], detail[768];
             ls_format_bytes(app->status.transfer_local_bytes, local, sizeof(local));
             ls_format_bytes(app->status.transfer_global_bytes, global, sizeof(global));
@@ -2303,19 +2413,19 @@ static void ls_run_overview(ls_app *app) {
                      ls_ui_top_state_label(summary.state), summary.message,
                      local, global, needed, received, sent);
             ls_message(detail);
-        } else if (app->controller_available && focus == 5) {
+        } else if (focused_row == LS_OVERVIEW_CARDS) {
             ls_show_cards(app);
-        } else if (app->controller_available && focus == 6) {
+        } else if (focused_row == LS_OVERVIEW_FOLDERS) {
             ls_show_folders(app);
-        } else if (app->controller_available && focus == 7) {
+        } else if (focused_row == LS_OVERVIEW_DEVICES) {
             ls_show_devices(app);
-        } else if (app->controller_available && focus == 8) {
+        } else if (focused_row == LS_OVERVIEW_NETWORK) {
             ls_change_network(app);
-        } else if (app->controller_available && focus == 9) {
+        } else if (focused_row == LS_OVERVIEW_WEB) {
             ls_show_gateway(app);
-        } else if (app->controller_available && focus == 10) {
+        } else if (focused_row == LS_OVERVIEW_SETTINGS) {
             ls_show_settings(app);
-        } else if (app->controller_available && focus == 11) {
+        } else if (focused_row == LS_OVERVIEW_ISSUES) {
             ls_show_issues(app);
         }
         if (app->exit_requested) return;

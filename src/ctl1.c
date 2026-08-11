@@ -119,3 +119,43 @@ done:
     cJSON_Delete(response);
     return result;
 }
+
+const char *ls_ctl1_state_label(const ls_ctl1_status *status,
+                                bool service_control_available,
+                                bool controller_available) {
+    const char *state;
+    if (!service_control_available || !status || !status->found) return "Unavailable";
+    state = status->effective_state;
+    if (strcmp(state, "disabled") == 0 || strcmp(state, "stopped") == 0) return "Stopped";
+    if (strcmp(state, "starting") == 0) return "Starting…";
+    if (strcmp(state, "running") == 0) return controller_available ? "Running" : "Starting…";
+    if (strcmp(state, "stopping") == 0) return "Stopping…";
+    if (strcmp(state, "backoff") == 0) return "Retrying…";
+    if (strcmp(state, "unavailable") == 0) return "Unavailable";
+    return "Needs attention";
+}
+
+const char *ls_ctl1_action_operation(const ls_ctl1_status *status,
+                                     bool service_control_available) {
+    const char *state;
+    if (!service_control_available || !status || !status->found) return NULL;
+    state = status->effective_state;
+    if (strcmp(state, "disabled") == 0 || strcmp(state, "stopped") == 0 ||
+        strcmp(state, "failed") == 0) return "run";
+    if (strcmp(state, "starting") == 0 || strcmp(state, "running") == 0 ||
+        strcmp(state, "backoff") == 0) return "stop";
+    return NULL;
+}
+
+const char *ls_ctl1_action_label(const ls_ctl1_status *status,
+                                 bool service_control_available) {
+    const char *operation = ls_ctl1_action_operation(status, service_control_available);
+    if (!operation) return NULL;
+    return strcmp(operation, "run") == 0 ? "Run Syncthing" : "Stop Syncthing";
+}
+
+bool ls_ctl1_should_query_controller(const ls_ctl1_status *status,
+                                     bool service_control_available) {
+    return service_control_available && status && status->found &&
+           strcmp(status->effective_state, "running") == 0;
+}

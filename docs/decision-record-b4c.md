@@ -282,6 +282,56 @@ trees. The first MLP1 returned to its original Linux-only `ra-saves` and
 second-card `Stella 2014` tree was untouched. Android retained its installed
 app, identity, and onboarding permissions but no folders or devices.
 
+## Focused foreground UX evidence
+
+Catastrophe PR #4 added the optional options-list timer at merge commit
+`6dbf3adaad42b20e11ef22d06d5ecef8ec63e25f`. Its native headless smoke
+returned `CAT_ACTION_REFRESH` after the requested interval while retaining a
+focused off-screen row and its scroll position. All six native examples built
+before merge. This Syncthing branch pins that exact commit in CI.
+
+The final foreground UI (`SHA-256`
+`bb760ef3cc93bb005cac9d58d09d45a9550d4c343d7880a07e006b501b69fe27`)
+and controller (`SHA-256`
+`6bc7ff734e70a9e4eb0e066ce7c495e8d1484649ee4a831992b09de548139a20`)
+were staged byte-for-byte to the first physical MLP1. The active Leaf card was
+resolved by its platform marker at `/mnt/sdcard`; `/mnt/external_sd` was only a
+symlink to that same mount and the second physical card had no Leaf marker.
+
+The native 960x720 UI opened while the service was stopped with **Stopped**,
+**Run Syncthing**, **Guided setup: Starts service**, and no socket error. The
+Service row explained the stopped state and next action. Selecting Run showed
+**Starting…** and then **Running** without another input; the same logical
+service-action row remained focused as the status, cards, folders, devices,
+network, browser, settings, and issues rows appeared. Selecting Stop showed
+**Stopping…** and returned to **Stopped** without a controller-socket error.
+Separate CTL-1 Run and Stop requests made while the overview was foreground
+were likewise reflected automatically. The configured two cards, Saves and
+States folders, original Linux device, zero-byte transfer state, and
+**Up to date** summary remained unchanged.
+
+The overview row and screen both read **Read-only web view**. The device screen
+put **Status only—make changes on the handheld** before the HTTPS address and
+PIN, and wrapped the certificate fingerprint into the available text column.
+An eight-second idle check proved the foreground screen continued its
+one-second gateway keepalive instead of closing at the four-second gateway
+deadline.
+
+A real client paired by PIN and a separate headless Chrome profile paired
+through the fragment-only QR token. The pairing page contained the read-only
+warning. Chrome rendered the unmodified Syncthing dashboard and its visible
+upstream controls beneath one persistent banner reading **Read-only Leaf
+status view. Make changes on the handheld.** With an explicit gzip request,
+the trusted root returned 200 with exactly one banner, identity encoding, and
+a corrected 77,542-byte `Content-Length`; HEAD returned 200 without body
+decoration. A real POST to `/rest/config` returned 405 with **The Syncthing
+browser view is read-only.**
+
+Qualification cleanup revoked both temporary browser trusts, closed the
+gateway, removed the temporary virtual input device and its staging files,
+restored the original package launch script, and returned CTL-1 to its original
+enabled/running state. No Saves or States content was written or removed.
+
 ## Remaining handoff
 
 - Exercise the public B5 setup, add/remove-later, conflict-recovery, and
