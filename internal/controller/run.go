@@ -1030,8 +1030,12 @@ func (runner Runner) Run(ctx context.Context) error {
 					if gameCheckCancel != nil {
 						gameCheckCancel()
 					}
+					inventory, inventoryErr := loadCards(runner.Config.Sources, registryDirectory)
 					selected, selectErr := foldersForGameCheck(
-						event, cardInventory, session.Folders, folderControls.Snapshot())
+						event, inventory, session.Folders, folderControls.Snapshot())
+					if inventoryErr != nil {
+						selectErr = fmt.Errorf("refresh card inventory: %w", inventoryErr)
+					}
 					if selectErr != nil {
 						if runner.Logf != nil {
 							runner.Logf("check-before-stop rejected: %v", selectErr)

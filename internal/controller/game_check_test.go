@@ -71,6 +71,32 @@ func TestFoldersForGameCheckUsesPhysicalCardBinding(t *testing.T) {
 	}
 }
 
+func TestFoldersForGameCheckUsesCardAtItsCurrentSource(t *testing.T) {
+	cardID := "00112233445566778899aabbccddeeff"
+	root := t.TempDir()
+	source := leaf.Source{ID: "primary", Root: root, SavesPath: filepath.Join(root, "Saves"), StatesPath: filepath.Join(root, "States")}
+	marker := ".leaf-states-marker"
+	if err := os.MkdirAll(filepath.Join(source.StatesPath, marker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inventory := []cards.Card{{
+		Source: source, Identity: cards.Identity{Version: 1, ID: cardID},
+		State: cards.StateEnrolled, Present: true, Writable: true,
+	}}
+	folders := []syncthingconfig.ConfiguredFolder{{
+		ID: "shared-states", Kind: "states", Path: source.StatesPath,
+		Type: "sendonly", MarkerName: marker,
+	}}
+	selected, err := foldersForGameCheck(life1.Event{
+		SourceID: source.ID, SavesPath: source.SavesPath, StatesPath: source.StatesPath,
+	}, inventory, folders, map[string]folderControlRecord{
+		"shared-states": {CardID: cardID, Kind: "states", MarkerName: marker},
+	})
+	if err != nil || len(selected) != 1 || selected[0].ID != "shared-states" {
+		t.Fatalf("selected after card move = %+v, %v", selected, err)
+	}
+}
+
 func TestRunGameCheckSendsWaitingThenStop(t *testing.T) {
 	stopped := make(chan string, 1)
 	waiting := make(chan struct{}, 1)

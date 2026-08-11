@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,10 @@ func (upstream *fakeB3Upstream) ReadUIStatus(_ context.Context, folders []syncth
 		}
 	}
 	return status, nil
+}
+
+func (upstream *fakeB3Upstream) ReadGameCheckStatus(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+	return syncthingconfig.GameCheckStatus{Current: true}, nil
 }
 
 func (upstream *fakeB3Upstream) SetFolderPaused(_ context.Context, folderID string, paused bool) error {
@@ -188,6 +193,46 @@ func TestRunRejectsUnexpectedGameStartThenShutsDown(t *testing.T) {
 	}
 	if _, err := os.Lstat(config.ControlSocket); !os.IsNotExist(err) {
 		t.Fatalf("control socket remained after controller exit: %v", err)
+	}
+}
+
+func TestRunRejectsGameCheckWhenCardRefreshFails(t *testing.T) {
+	config := testConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan life1.Event, 1)
+	events <- life1.Event{Version: 1, Name: "game.check", LaunchID: "launch", SourceID: "primary"}
+	rejected := make(chan string, 1)
+	lifecycle := &fakeLifecycle{
+		next: func(ctx context.Context) (life1.Event, error) {
+			select {
+			case event := <-events:
+				return event, nil
+			case <-ctx.Done():
+				return life1.Event{}, ctx.Err()
+			}
+		},
+		reject: func(_ string, reason string) error {
+			rejected <- reason
+			cancel()
+			return nil
+		},
+	}
+	upstream := &fakeUpstream{done: make(chan error)}
+	runner := testServiceRunner(config, lifecycle, upstream)
+	loads := 0
+	runner.LoadCards = func(leaf.SourceList, string) ([]cards.Card, error) {
+		loads++
+		if loads > 1 {
+			return nil, errors.New("inventory unavailable")
+		}
+		return nil, nil
+	}
+	if err := runner.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if reason := <-rejected; reason != "unsafe-card-binding" || loads != 2 {
+		t.Fatalf("rejection = %s, inventory loads = %d", reason, loads)
 	}
 }
 
@@ -363,13 +408,35 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		Source: config.Sources[0], Identity: cards.Identity{Version: 1, ID: "00112233445566778899aabbccddeeff"},
 		State: cards.StateEnrolled, Present: true, Writable: true,
 	}
+	var enrolled atomic.Bool
+	events := make(chan life1.Event, 1)
+	checkStopped := make(chan string, 1)
+	checkRejected := make(chan string, 1)
+	lifecycle := &fakeLifecycle{
+		next: func(ctx context.Context) (life1.Event, error) {
+			select {
+			case event := <-events:
+				return event, nil
+			case <-ctx.Done():
+				return life1.Event{}, ctx.Err()
+			}
+		},
+		stop: func(launchID string) error {
+			checkStopped <- launchID
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			checkRejected <- reason
+			return nil
+		},
+	}
 	upstream := newFakeB3Upstream()
 	upstream.devices = append(upstream.devices,
 		"CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH-IIIIIII-JJJJJJJ")
 	runner := Runner{
 		Config: config,
 		Connect: func(context.Context, life1.Config) (Lifecycle, life1.GameState, error) {
-			return &fakeLifecycle{}, life1.GameState{}, nil
+			return lifecycle, life1.GameState{}, nil
 		},
 		Recover: func(string, syncthingconfig.SyncFilesystemFunc) (syncthingconfig.RecoveryResult, error) {
 			return syncthingconfig.RecoveryResult{State: syncthingconfig.RecoveryClean}, nil
@@ -383,7 +450,17 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		StartProcess: func(context.Context, syncthingconfig.ProcessOptions) (UpstreamProcess, error) {
 			return upstream, nil
 		},
+		EnrollCard: func(leaf.Source) (cards.Identity, bool, error) {
+			enrolled.Store(true)
+			return card.Identity, true, nil
+		},
 		LoadCards: func(leaf.SourceList, string) ([]cards.Card, error) {
+			if !enrolled.Load() {
+				unenrolled := card
+				unenrolled.Identity = cards.Identity{}
+				unenrolled.State = cards.StateUnenrolled
+				return []cards.Card{unenrolled}, nil
+			}
 			return []cards.Card{card}, nil
 		},
 	}
@@ -392,6 +469,12 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- runner.Run(ctx) }()
 	waitForControlSocket(t, config.ControlSocket)
+	enroll := sendUIControlRequest(t, config.ControlSocket,
+		`{"v":1,"id":"enroll","op":"card.enroll","args":{"source_id":"primary"}}`)
+	if !enroll.OK || enroll.Result == nil || len(enroll.Result.Cards) != 1 ||
+		enroll.Result.Cards[0].State != "enrolled" {
+		t.Fatalf("card enrollment = %+v", enroll)
+	}
 
 	plan := sendUIControlRequest(t, config.ControlSocket,
 		`{"v":1,"id":"plan","op":"folder.onboard.plan","args":{"source_id":"primary","kind":"saves","folder_type":"sendreceive","device_ids":["IIIIIII-JJJJJJJ-KKKKKKK-LLLLLLL-MMMMMMM-NNNNNNN-OOOOOOO-PPPPPPP"]}}`)
@@ -491,6 +574,20 @@ func TestRunFolderOnboardingFirstSyncAndSendOnlyTransition(t *testing.T) {
 		`{"v":1,"id":"start-again","op":"folder.first-sync.start","args":{"folder_id":"%s","confirmed":true,"hub_versioning_acknowledged":true}}`, folderID))
 	if !startAgain.OK || startAgain.Result.Folders[0].FirstSyncState != "complete" || startAgain.Result.Folders[0].Paused {
 		t.Fatalf("receive restart = %+v", startAgain)
+	}
+	events <- life1.Event{
+		Version: 1, Name: "game.check", LaunchID: "after-onboarding", SourceID: "primary",
+		SavesPath: saves, StatesPath: states,
+	}
+	select {
+	case launchID := <-checkStopped:
+		if launchID != "after-onboarding" {
+			t.Fatalf("stopped launch = %s", launchID)
+		}
+	case reason := <-checkRejected:
+		t.Fatalf("game check after live enrollment was rejected: %s", reason)
+	case <-time.After(2 * time.Second):
+		t.Fatal("game check after live enrollment did not finish")
 	}
 	if len(upstream.pauseCalls) < 5 || upstream.pauseCalls[len(upstream.pauseCalls)-1] {
 		t.Fatalf("upstream pause transitions = %v", upstream.pauseCalls)

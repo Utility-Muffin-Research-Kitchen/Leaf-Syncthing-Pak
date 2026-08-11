@@ -392,6 +392,69 @@ regular file below both physical cards' Saves and States roots were identical
 Only the temporary input wrapper, staging tree, and previous package copy were
 removed during cleanup.
 
+## Live card validation and device-QR evidence
+
+The reported Sonic failure was reproduced before this fix on the SSH MLP1.
+Both devices held byte-identical slot-99 state and preview files, with SHA-256
+`680eb7e11f5e5085cecff0bce721e670e1ef86fcb7ddd458bafc0733f1f6e1b8`
+and `b8117698f85c1a5ccd574461b91ff26bb67d5f312900c498fdef010a08be8f94`.
+Jawaka selected `genesis_plus_gx`, but the long-running Syncthing controller
+returned `unsafe-card-binding` before RetroArch started. The controller had
+started before that card was enrolled and its folders were configured, so its
+startup inventory was stale even though the live Cards and Folders status was
+safe.
+
+The host regression now starts with an unenrolled card, enrolls it and
+completes Saves first-sync setup through the running controller, then proves a
+subsequent `game.check` uses a newly loaded physical inventory without a
+restart. Additional checks retain fail-closed inventory-read behavior and
+validate a card at its current source. Host qualification passed `make test`,
+`go vet ./...`, `go test -race ./internal/controller ./internal/syncthing`,
+and an exact-worktree MLP1 package build. Jawaka passed
+`make life1-test life1-game-check-ipc-smoke`, including the new
+`unsafe-card-binding` fixture,
+the full native build, and `make mlp1`.
+
+The final development package contains controller SHA-256
+`f53407486ad688b6c6d1eb569199c0e5d886796906b48dd5da32de4ca7df64aa`,
+foreground UI SHA-256
+`3bce6067ffa7b51610909abb1caab876effaac9b0f4b8268dd516805cfc20efe`,
+and unchanged upstream Syncthing SHA-256
+`f08f04f42c25f26fe68febfd8e8b777918b17da8011195317bbb8a0cc3a92e97`.
+The archive SHA-256 is
+`ced52eed9ac6dafdf5003471bdcb25af851c52ef42ea47031f07e990759b2cdd`.
+The paired Jawaka daemon and launcher hashes are respectively
+`db4d0c53c25de54c3bafaab795a95032155c44e1d37b8cb934da77407014746a`
+and `aa30a80e39db08d6cc49b0d207c650dfffbd80737e9c1fff623cf228307619ae`.
+Both physical MLP1 installations matched these host artifacts exactly.
+
+The SSH MLP1 swapped its two card mount points during the qualification
+reboot: the Leaf card moved from `/mnt/sdcard` to `/media/sdcard1`, while the
+Sonic card and its States tree moved the other way. Leaf followed the physical
+card identity and autostarted normally. On that swapped layout, Sonic's
+ordinary `game.check` reported current in 99 ms, Jawaka verified Syncthing
+stopped, and RetroArch started with `genesis_plus_gx`. A real
+`LOAD_STATE_SLOT 99` returned success against the synchronized state path.
+The capture is
+`build/qualification-card-check-qr/ssh/sonic-state-loaded.png`. After exit,
+Syncthing resumed and both slot-99 hashes were still identical on both MLP1s.
+
+The repaired **My Syncthing Device** screen renders four device-ID groups per
+line without changing the QR payload. Captures are
+`build/qualification-card-check-qr/ssh/device-id-qr.png` and
+`build/qualification-card-check-qr/adb/device-id-qr.png`. Independent QR
+decoding on each image matched that device's `syncthing device-id` output
+exactly. The wired MLP1 also completed a normal check-before-stop game launch
+and service resume while qualifying the foreground flow.
+
+Qualification cleanup removed the temporary input devices, unmanaged test
+UIs, raw captures, and previous-package staging copies. The package launch
+script was restored to its original SHA-256
+`d09d8d440741d213e87f3eef8320fe743f3621bfd2ac623594cb01ab82e4709f`.
+Both devices were left with no active game or blocked launch and Syncthing
+enabled, running, and LIFE-1 subscribed. The VPS and Syncthing configuration
+were not modified.
+
 ## Remaining handoff
 
 - Exercise the public B5 setup, add/remove-later, conflict-recovery, and
