@@ -864,6 +864,8 @@ const char *ls_ui_guided_progress_label(const ls_ui_status *status) {
     int usable_cards = 0;
     int configured_peers = 0;
     int saves_count = 0;
+    int saves_syncing = 0;
+    int saves_attention = 0;
     int index;
     if (!status || strcmp(status->controller, "running") != 0) return "Start";
     for (index = 0; index < status->card_count; index++) {
@@ -878,16 +880,37 @@ const char *ls_ui_guided_progress_label(const ls_ui_status *status) {
     if (configured_peers == 0) return "Connect device";
     for (index = 0; index < status->folder_count; index++) {
         const ls_ui_folder *folder = &status->folders[index];
+        const char *state;
         if (strcmp(folder->kind, "saves") != 0) continue;
         saves_count++;
         if (!folder->first_sync_state[0] || strcmp(folder->first_sync_state, "complete") != 0)
             return "Finish first sync";
+        state = ls_ui_folder_state_label(folder);
+        if (strcmp(state, "Syncing") == 0) saves_syncing = 1;
+        else if (strcmp(state, "Needs attention") == 0) saves_attention = 1;
     }
     if (saves_count == 0) return "Set up Saves";
+    if (saves_attention) return "Fix issue";
+    if (saves_syncing) return "Syncing";
+    if (status->issue_count > 0) return "Fix issue";
+    for (index = 0; index < status->folder_offer_count; index++) {
+        if (!status->folder_offers[index].ignored) return "Review offer";
+    }
     if (ls_ui_summarize_status(status, &summary) != 0) return "Check status";
     if (summary.state == LS_UI_SYNCING) return "Syncing";
     if (summary.state == LS_UI_NEEDS_ATTENTION) return "Fix issue";
     return "Complete";
+}
+
+bool ls_ui_guided_setup_complete(const ls_ui_status *status) {
+    int index;
+    if (!status || strcmp(status->controller, "running") != 0) return false;
+    for (index = 0; index < status->folder_count; index++) {
+        const ls_ui_folder *folder = &status->folders[index];
+        if (strcmp(folder->kind, "saves") == 0 &&
+            strcmp(folder->first_sync_state, "complete") == 0) return true;
+    }
+    return false;
 }
 
 const char *ls_ui_folder_state_label(const ls_ui_folder *folder) {
@@ -944,10 +967,25 @@ int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *sum
                 snprintf(summary->message, sizeof(summary->message), "Resume %s when it is safe to sync.", folder->label);
             else if (folder->peer_count <= 0)
                 snprintf(summary->message, sizeof(summary->message), "Share %s with at least one device.", folder->label);
+            else if (folder->remote_peer[0] && strcmp(folder->remote_state, "offline") == 0)
+                snprintf(summary->message, sizeof(summary->message),
+                         "%s is offline for %s. Start Syncthing there or check its network.",
+                         folder->remote_peer, folder->label);
+            else if (folder->remote_peer[0] && strcmp(folder->remote_state, "paused") == 0)
+                snprintf(summary->message, sizeof(summary->message),
+                         "%s is paused for %s. Resume the folder on that device.",
+                         folder->remote_peer, folder->label);
+            else if (folder->remote_peer[0] && strcmp(folder->remote_state, "not-sharing") == 0)
+                snprintf(summary->message, sizeof(summary->message),
+                         "%s is not sharing %s. Share it with Leaf on that device.",
+                         folder->remote_peer, folder->label);
+            else if (folder->remote_peer[0] && strcmp(folder->remote_state, "unknown") == 0)
+                snprintf(summary->message, sizeof(summary->message),
+                         "Waiting for %s to report %s. Confirm it accepted and shared the folder.",
+                         folder->remote_peer, folder->label);
             else if (folder->remote_peer[0])
-                snprintf(summary->message, sizeof(summary->message), "%s needs attention for %s (%s).",
-                         folder->remote_peer, folder->label,
-                         folder->remote_state[0] ? folder->remote_state : "completion unknown");
+                snprintf(summary->message, sizeof(summary->message), "%s needs attention for %s.",
+                         folder->remote_peer, folder->label);
             else
                 snprintf(summary->message, sizeof(summary->message), "Check %s before syncing.", folder->label);
             return 0;

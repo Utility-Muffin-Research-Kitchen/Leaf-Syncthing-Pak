@@ -44,8 +44,8 @@ missing. A monotonically increasing per-folder epoch prevents a snapshot from
 an earlier receive period from satisfying a later Send Only to receive
 transition.
 
-Conflicts are listed without mutation and provide Rescan and Open Thing-File
-actions. Thing-File lookup follows every `APPS_PATHS` source, and the UI warns
+Conflicts are listed without mutation and provide Rescan and Open File explorer
+actions. File explorer lookup follows every `APPS_PATHS` source, and the UI warns
 that a general file manager is not coordinated with Syncthing. Folder details
 state that gameplay is stop-only and disclose B0b's measured costs: about
 7.4 seconds before launch, about 0.8 seconds for control to return after play,

@@ -200,7 +200,7 @@ digests. The UI ended at **Guided setup: Complete** and **Status: Up to date**,
 with the selected peer reporting current and zero needed bytes.
 
 The same UI pass also confirmed the separate **Create** versus **Join** choice,
-the warned States opt-in, multi-peer selection, the Thing-File first-sync
+the warned States opt-in, multi-peer selection, the File explorer first-sync
 warning, and the resumable prepare/start/completion states.
 
 ## Second-Leaf same-folder evidence
@@ -331,6 +331,66 @@ Qualification cleanup revoked both temporary browser trusts, closed the
 gateway, removed the temporary virtual input device and its staging files,
 restored the original package launch script, and returned CTL-1 to its original
 enabled/running state. No Saves or States content was written or removed.
+
+## Guided-setup UX follow-up evidence
+
+The follow-up foreground UI used for the physical flow (`SHA-256`
+`94922649dfde5c0fea95f6816086691505cd9acf5c805e84ccc73cda80882906`)
+was followed by a wording-only rebuild that adds the explicit offline, paused,
+and not-sharing next actions (`SHA-256`
+`11849eef5bae35c79a385b6e09180f5174b21ee532a9b417f9141c1081d24d2f`).
+It was packaged with the unchanged controller (`SHA-256`
+`6bc7ff734e70a9e4eb0e066ce7c495e8d1484649ee4a831992b09de548139a20`)
+and upstream Syncthing (`SHA-256`
+`f08f04f42c25f26fe68febfd8e8b777918b17da8011195317bbb8a0cc3a92e97`).
+The final reproducible development archive hash was
+`4167066de550f3574c130fe8314b250ddef1b05697c09f3b6193d61b90942a20`.
+The final installed files on the SSH MLP1 matched those host artifacts exactly.
+
+Host qualification passed `make test`, `go vet ./...`,
+`go test -race ./internal/controller ./internal/syncthing`, and the MLP1
+controller/UI/package build. The C semantic client covers incomplete and
+first-sync-complete ordering, one or multiple pending offers, deliberately
+ignored offers, and distinct offline, paused, not-sharing, and unknown remote
+summaries. The exact `Thing-File.pak` lookup remains internal; all foreground
+copy and supporting records now call it **File explorer**.
+
+The existing configured device first proved the non-transient completion rule.
+Its Saves folder had completed first-sync protection while the configured VPS
+peer was offline and zero controller issues existed. The real 960x720 overview
+placed **Guided setup: Fix issue** last, displayed **vranken-vps is offline for
+Leaf Saves — Primary** directly on Status, omitted the Issues row, and showed
+**Read-only web view**. This attention state did not incorrectly move Guided
+setup back to the first position.
+
+After the supported full reset, card enrollment remained present while the
+Syncthing identity, configuration, indexes, peers, folders, snapshots, and
+version history were absent. The stopped overview focused **Guided setup** as
+its first row and showed **Starts service**, **Stopped**, **Start with Leaf:
+Off**, and **Run Syncthing** without an error. Starting Guided setup used the
+unnumbered **Connect a device** progression. While its live Devices screen was
+open, adding the known VPS ID locally through the supported controller
+operation made that guided-only screen return automatically. Normal VPS
+configuration was not changed.
+
+Because neither VPS folder was shared to this new Leaf identity, the journey
+then advanced directly to the live **Set Up Saves** screen. It kept **Waiting
+for folder offer — Share it to Leaf on the other device** first and **Create
+new Saves folder instead** second while polling. No alternative folder ID was
+created. This is the expected no-offer behavior for the confirmed VPS state;
+the host semantics cover the complementary offered-folder and `Review offer`
+paths.
+
+A second supported full reset completed the qualification. The device was left
+with the new package installed, service disabled, no controller socket or
+Syncthing processes, and no generated identity/configuration/index, peers,
+folders, snapshots, or versions. Its original card identity and card registry
+remain enrolled for the next tester. Pre/post SHA-256 manifests of every
+regular file below both physical cards' Saves and States roots were identical
+(both manifests hash to
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`).
+Only the temporary input wrapper, staging tree, and previous package copy were
+removed during cleanup.
 
 ## Remaining handoff
 
