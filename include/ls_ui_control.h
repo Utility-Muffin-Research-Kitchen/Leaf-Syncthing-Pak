@@ -324,6 +324,7 @@ bool ls_ui_has_capability(const ls_ui_status *status, const char *operation);
 const char *ls_ui_top_state_label(ls_ui_top_state state);
 const char *ls_ui_folder_state_label(const ls_ui_folder *folder);
 const char *ls_ui_guided_progress_label(const ls_ui_status *status);
+bool ls_ui_guided_setup_complete(const ls_ui_status *status);
 int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *summary);
 
 #endif

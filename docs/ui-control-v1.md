@@ -137,10 +137,23 @@ Join for Saves, presents the exact peer checklist, asks for the initial
 direction in plain language, and reuses the B3 snapshot/first-sync flow.
 The overview names that next action directly (`Enroll card`, `Fix card`,
 `Connect device`, `Set up Saves`, `Finish first sync`, `Syncing`, or `Fix
-issue`) instead of a generic continue label. If several cards already have
+issue`) instead of a generic continue label. It places Guided setup first until
+one Saves folder completes first-sync protection, then last; operational
+attention does not make a configured journey incomplete. When controller state
+is unavailable, setup stays first because it can start the service. If several cards already have
 independent Saves shares, the journey asks which share to continue and
 identifies each by its durable card suffix; it never guesses from the current
 mountpoint or changes the other shares.
+
+The journey uses action headings rather than fixed step numbers. Devices and
+folder offers refresh every second while open. A Devices view entered from
+Guided setup returns automatically after a peer is accepted or added. Saves
+setup waits visibly for an explicit Syncthing folder offer and explains that an
+existing remote folder is undiscoverable until the other device shares it with
+Leaf. Joining is recommended when an offer exists; creating a different folder
+ID is a separately confirmed fallback. After Saves is current, non-ignored
+remaining offers produce `Review offer` so an existing States share can be
+joined or deliberately ignored.
 
 The journey does not finish at configuration acceptance. Its selected Saves
 folder must have completed first-sync protection, have zero local need, and
@@ -151,6 +164,10 @@ the overview and folder-list labels:
 - `Syncing` with remaining items/bytes and the first involved peer; or
 - `Needs attention` with the first actionable offer, conflict, pause, folder,
   card, peer, or controller reason.
+
+The overview shows that reason directly on Status. The separate Issues row is
+present only for actual controller issues; peer completion states such as
+offline, paused, not-sharing, and unknown use specific Status guidance instead.
 
 States is offered separately only after Saves reaches `Up to date`, with the
 emulator/core/version compatibility warning.

@@ -158,7 +158,9 @@ int main(void) {
     status.peers[0].pending = false;
     status.folder_count = 0;
     assert(strcmp(ls_ui_guided_progress_label(&status), "Set up Saves") == 0);
+    assert(!ls_ui_guided_setup_complete(&status));
     status.folder_count = 1;
+    assert(!ls_ui_guided_setup_complete(&status));
     assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Needs attention") == 0);
     {
         ls_ui_status_summary summary;
@@ -186,11 +188,37 @@ int main(void) {
         assert(strcmp(ls_ui_folder_state_label(&status.folders[0]), "Up to date") == 0);
         assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_UP_TO_DATE);
         assert(strcmp(ls_ui_guided_progress_label(&status), "Complete") == 0);
+        assert(ls_ui_guided_setup_complete(&status));
+
+        status.folder_offers[0].ignored = false;
+        status.folder_offer_count = 1;
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Review offer") == 0);
+        status.folder_offers[1] = status.folder_offers[0];
+        status.folder_offer_count = 2;
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Review offer") == 0);
+        status.folder_offers[0].ignored = true;
+        status.folder_offers[1].ignored = true;
+        assert(strcmp(ls_ui_guided_progress_label(&status), "Complete") == 0);
+        status.folder_offer_count = 0;
 
         snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "offline");
         assert(ls_ui_summarize_status(&status, &summary) == 0 && summary.state == LS_UI_NEEDS_ATTENTION &&
-               strstr(summary.message, "Laptop") != NULL);
+               strstr(summary.message, "Laptop is offline") != NULL &&
+               strstr(summary.message, "Start Syncthing") != NULL);
         assert(strcmp(ls_ui_guided_progress_label(&status), "Fix issue") == 0);
+        assert(ls_ui_guided_setup_complete(&status));
+
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "paused");
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && strstr(summary.message, "Resume the folder") != NULL);
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "not-sharing");
+        assert(ls_ui_summarize_status(&status, &summary) == 0 && strstr(summary.message, "Share it with Leaf") != NULL);
+        snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "unknown");
+        assert(ls_ui_summarize_status(&status, &summary) == 0 &&
+               strstr(summary.message, "accepted and shared") != NULL);
+
+        snprintf(status.controller, sizeof(status.controller), "stopped");
+        assert(!ls_ui_guided_setup_complete(&status));
+        snprintf(status.controller, sizeof(status.controller), "running");
     }
     puts("PASS ui-control-v1 C semantic client (4 frozen fixtures + B3 rich status)");
     return 0;
