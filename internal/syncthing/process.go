@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,26 @@ import (
 )
 
 const DefaultReadinessTimeout = 30 * time.Second
+
+// Stop ladder bounds, sized from MLP1 measurements. A settled upstream accepts
+// the clean shutdown and exits in 416-1009 ms, or exits on TERM alone in
+// 202-634 ms; the windows sit above those ranges so a shutdown that would have
+// completed cleanly is not killed for a few hundred milliseconds. An upstream
+// still running its start-up scan does not exit inside any plausible window and
+// always reaches KILL, so widening further buys nothing for the slow case and
+// costs the launch that time. The full ladder is bounded by
+// GracefulStopWindow + TermWindow + killVerifyWindow, which must stay far below
+// the manifest's stop_grace_ms for the controller — not Jawaka's grace wall —
+// to own escalation.
+const (
+	DefaultGracefulStopWindow = 1200 * time.Millisecond
+	DefaultTermWindow         = 600 * time.Millisecond
+
+	shutdownRequestTimeout  = 400 * time.Millisecond
+	shutdownRetryDelay      = 100 * time.Millisecond
+	shutdownRequestAttempts = 3
+	killVerifyWindow        = 2 * time.Second
+)
 
 type Conflict struct {
 	ProcessIDs       []int
@@ -41,6 +62,11 @@ type ProcessOptions struct {
 	DetectConflict   DetectConflictFunc
 	Stdout           io.Writer
 	Stderr           io.Writer
+	// GracefulStopWindow and TermWindow bound the stop ladder's first two
+	// rungs. Zero selects the defaults above; tests shorten them.
+	GracefulStopWindow time.Duration
+	TermWindow         time.Duration
+	Logf               func(string, ...any)
 }
 
 type Process struct {
@@ -175,31 +201,160 @@ func (process *Process) Done() <-chan error {
 	return process.done
 }
 
+// Shutdown runs the controller-owned stop ladder: request the supported clean
+// shutdown, wait a bounded graceful window, then escalate through the guardian
+// TERM/KILL path.
+//
+// The manifest's stop_grace_ms is Jawaka's backstop, not a schedule. Before this
+// ladder existed the graceful wait consumed the caller's whole grace, so the
+// guardian path below could never run before Jawaka's group SIGKILL at the
+// grace wall — a stuck upstream cost the full grace on every launch. The ladder
+// must therefore complete well inside stop_grace_ms so that wall stays
+// unreachable.
 func (process *Process) Shutdown(ctx context.Context) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://syncthing-unix/rest/system/shutdown", nil)
-	if err == nil {
+	started := time.Now()
+	requested, requestErr := process.requestCleanShutdown(ctx)
+	window := process.gracefulStopWindow()
+	if requested {
+		process.logf("stop: clean shutdown accepted in %d ms; graceful window %d ms",
+			elapsedMS(started), window.Milliseconds())
+	} else {
+		// Nothing accepted the request, so the graceful window has nothing to
+		// wait for. Escalate straight away rather than holding the caller for a
+		// shutdown upstream was never told to perform.
+		process.logf("stop: clean shutdown not accepted after %d ms (%v); escalating immediately",
+			elapsedMS(started), requestErr)
+		window = 0
+	}
+	graceful, cancelGraceful := context.WithTimeout(context.Background(), window)
+	defer cancelGraceful()
+	select {
+	case waitErr := <-process.done:
+		_ = waitErr
+		process.client.CloseIdleConnections()
+		// The direct child is gone. A monitor grandchild may still hold the
+		// group, so prove absence on a short leash and escalate if it survives.
+		absence, cancelAbsence := context.WithTimeout(context.Background(), process.absenceWindow())
+		err := waitForGroupAbsence(absence, process.groupID, os.Getpid())
+		cancelAbsence()
+		if err == nil {
+			process.logf("stop: upstream group exited cleanly in %d ms", elapsedMS(started))
+			return nil
+		}
+		process.logf("stop: upstream exited but group survives after %d ms (%s); escalating",
+			elapsedMS(started), describeGroup(process.groupID, os.Getpid()))
+	case <-graceful.Done():
+		if window > 0 {
+			process.logf("stop: graceful window elapsed after %d ms (%s); escalating",
+				elapsedMS(started), describeGroup(process.groupID, os.Getpid()))
+		}
+	case <-ctx.Done():
+		process.logf("stop: caller grace expired after %d ms (%s); escalating",
+			elapsedMS(started), describeGroup(process.groupID, os.Getpid()))
+	}
+	// The guardian ladder owns its own bounds. It must run to completion even
+	// when the caller's grace is already spent, because reporting an unverified
+	// stop is worse than overrunning.
+	escalation, cancelEscalation := context.WithTimeout(context.Background(), process.escalationWindow())
+	defer cancelEscalation()
+	err := process.TerminateAndVerify(escalation)
+	if err != nil {
+		process.logf("stop: group absence unverified after %d ms: %v", elapsedMS(started), err)
+		return err
+	}
+	process.logf("stop: group absence verified after %d ms", elapsedMS(started))
+	return nil
+}
+
+// requestCleanShutdown asks upstream to shut down through its supported REST
+// path. A single attempt shares the client's short timeout, so a busy upstream
+// (a scan holding the HTTP handler) can drop the request entirely; retrying
+// distinguishes "upstream is busy right now" from "upstream will never answer",
+// and the returned error is what the phase log reports.
+func (process *Process) requestCleanShutdown(ctx context.Context) (bool, error) {
+	var lastErr error
+	for attempt := 0; attempt < shutdownRequestAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, lastErr
+			case <-process.done:
+				return true, nil
+			case <-time.After(shutdownRetryDelay):
+			}
+		}
+		attemptContext, cancel := context.WithTimeout(context.Background(), shutdownRequestTimeout)
+		request, err := http.NewRequestWithContext(
+			attemptContext, http.MethodPost, "http://syncthing-unix/rest/system/shutdown", nil)
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
 		request.Header.Set("X-API-Key", process.apiKey)
 		response, requestErr := process.client.Do(request)
-		if requestErr == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-			_ = response.Body.Close()
-		}
-	}
-	for {
-		select {
-		case waitErr := <-process.done:
-			_ = waitErr
-			process.client.CloseIdleConnections()
-			if err := waitForGroupAbsence(ctx, process.groupID, os.Getpid()); err == nil {
-				return nil
+		if requestErr != nil {
+			cancel()
+			lastErr = requestErr
+			// A missing socket file is terminal, not transient: upstream has
+			// already unlinked it on its way down (Jawaka's group TERM usually
+			// beats us to it), and it will never reappear for this generation.
+			// Retrying only delays escalation.
+			if errors.Is(requestErr, fs.ErrNotExist) {
+				return false, requestErr
 			}
-			return process.TerminateAndVerify(ctx)
-		case <-ctx.Done():
-			cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			return process.TerminateAndVerify(cleanupContext)
+			continue
 		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		_ = response.Body.Close()
+		cancel()
+		if response.StatusCode >= 400 {
+			lastErr = fmt.Errorf("clean shutdown rejected with status %d", response.StatusCode)
+			continue
+		}
+		return true, nil
 	}
+	if lastErr == nil {
+		lastErr = errors.New("clean shutdown request failed")
+	}
+	return false, lastErr
+}
+
+func (process *Process) gracefulStopWindow() time.Duration {
+	if process.options.GracefulStopWindow > 0 {
+		return process.options.GracefulStopWindow
+	}
+	return DefaultGracefulStopWindow
+}
+
+func (process *Process) termWindow() time.Duration {
+	if process.options.TermWindow > 0 {
+		return process.options.TermWindow
+	}
+	return DefaultTermWindow
+}
+
+func (process *Process) absenceWindow() time.Duration {
+	window := process.termWindow() / 2
+	if window < 100*time.Millisecond {
+		window = 100 * time.Millisecond
+	}
+	return window
+}
+
+func (process *Process) escalationWindow() time.Duration {
+	return process.termWindow() + killVerifyWindow
+}
+
+func (process *Process) logf(format string, arguments ...any) {
+	if process == nil || process.options.Logf == nil {
+		return
+	}
+	process.options.Logf(format, arguments...)
+}
+
+func elapsedMS(since time.Time) int64 {
+	return time.Since(since).Milliseconds()
 }
 
 // TerminateAndVerify is the guardian cleanup path. The controller stays alive
@@ -212,7 +367,7 @@ func (process *Process) TerminateAndVerify(ctx context.Context) error {
 	if err := signalGroupMembers(process.groupID, os.Getpid(), syscall.SIGTERM); err != nil {
 		return err
 	}
-	termDeadline := time.Now().Add(2 * time.Second)
+	termDeadline := time.Now().Add(process.termWindow())
 
 termWait:
 	for time.Now().Before(termDeadline) {
@@ -225,6 +380,8 @@ termWait:
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
+	process.logf("stop: group survived TERM window (%s); sending KILL",
+		describeGroup(process.groupID, os.Getpid()))
 	if err := signalGroupMembers(process.groupID, os.Getpid(), syscall.SIGKILL); err != nil {
 		return err
 	}

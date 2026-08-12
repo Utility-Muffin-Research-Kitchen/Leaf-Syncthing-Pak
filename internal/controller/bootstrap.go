@@ -121,7 +121,7 @@ func LoadConfig() (Config, error) {
 		DaemonSocket:    socket,
 		Sources:         environment.Sources,
 		Mode:            life1.ModeStop,
-		AckMS:           life1.DefaultAckMS,
+		AckMS:           gameCheckAckMS,
 		WaitMS:          life1.DefaultCheckWaitMS,
 		CheckBeforeStop: true,
 		RetryDelay:      DefaultRetry,

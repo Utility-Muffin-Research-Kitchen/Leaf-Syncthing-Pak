@@ -83,6 +83,30 @@ func groupAbsent(groupID, excludePID int) bool {
 	return err == nil && len(members) == 0
 }
 
+// describeGroup renders a one-line census of the surviving reserved group for
+// the stop phase log. Naming the survivors is what separates "upstream is slow
+// to exit" from "a monitor grandchild outlived it" after the fact.
+func describeGroup(groupID, excludePID int) string {
+	members, err := listGroupMembers(groupID, excludePID)
+	if err != nil {
+		return "group census unavailable: " + err.Error()
+	}
+	if len(members) == 0 {
+		return "group empty"
+	}
+	descriptions := make([]string, 0, len(members))
+	for _, member := range members {
+		command, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(member.PID), "comm"))
+		name := strings.TrimSpace(string(command))
+		if name == "" {
+			name = "?"
+		}
+		descriptions = append(descriptions,
+			fmt.Sprintf("%d/%s/%c", member.PID, name, member.State))
+	}
+	return "group survivors: " + strings.Join(descriptions, " ")
+}
+
 func waitForGroupAbsence(ctx context.Context, groupID, excludePID int) error {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()

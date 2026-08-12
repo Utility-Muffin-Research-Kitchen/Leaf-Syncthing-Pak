@@ -13,6 +13,17 @@ import (
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
+// The initial game.check reply must fit inside LIFE-1's ack_ms. Use the protocol
+// ceiling for this controller and reserve a final slice for writing the reply;
+// the rest bounds retries while upstream's REST surface is still coming up.
+const (
+	gameCheckAckMS         = 1000
+	firstStatusBudget      = 900 * time.Millisecond
+	firstStatusProbeBudget = 700 * time.Millisecond
+	firstStatusReplyMargin = 100 * time.Millisecond
+	firstStatusRetryDelay  = 100 * time.Millisecond
+)
+
 func foldersForGameCheck(event life1.Event, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder, controls map[string]folderControlRecord) ([]syncthingconfig.ConfiguredFolder, error) {
 	var card *cards.Card
 	for index := range inventory {
@@ -76,10 +87,38 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 	}
 	var last syncthingconfig.GameCheckStatus
 	haveLast := false
+	syntheticWaiting := false
+	// A launch that arrives while upstream's status endpoint is still coming up
+	// used to fail closed on the very first read error. Both an error reply and
+	// an ack timeout land the launch on Needs attention, so retrying inside a
+	// short budget can only improve the outcome — it never converts a real
+	// failure into a launch.
+	ackBudget := time.Duration(ackMS) * time.Millisecond
+	replyMargin := firstStatusReplyMargin
+	if ackBudget <= replyMargin {
+		replyMargin = ackBudget / 5
+	}
+	firstReplyBudget := ackBudget - replyMargin
+	if firstReplyBudget > firstStatusBudget {
+		firstReplyBudget = firstStatusBudget
+	}
+	firstReadDeadline := time.Now().Add(firstReplyBudget)
 	for {
 		readTimeout := time.Duration(ackMS) * time.Millisecond
 		if haveLast && readTimeout < 2*time.Second {
 			readTimeout = 2 * time.Second
+		} else if !haveLast {
+			remaining := time.Until(firstReadDeadline)
+			if remaining <= 0 {
+				_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
+				return
+			}
+			if readTimeout > remaining {
+				readTimeout = remaining
+			}
+			if readTimeout > firstStatusProbeBudget {
+				readTimeout = firstStatusProbeBudget
+			}
 		}
 		checkContext, cancel := context.WithTimeout(ctx, readTimeout)
 		current, err := upstream.ReadGameCheckStatus(checkContext, folders, selfDeviceID)
@@ -92,6 +131,32 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 				logf("check-before-stop needs attention: %v", err)
 			}
 			if !haveLast {
+				if errors.Is(err, context.DeadlineExceeded) && time.Until(firstReadDeadline) > 0 {
+					last = syncthingconfig.GameCheckStatus{PendingItems: 1}
+					if err := lifecycle.SendWaiting(event.LaunchID, last.PendingItems, last.PendingBytes); err != nil {
+						return
+					}
+					haveLast = true
+					syntheticWaiting = true
+					continue
+				}
+				if remaining := time.Until(firstReadDeadline); remaining > 0 {
+					if remaining > firstStatusRetryDelay {
+						remaining = firstStatusRetryDelay
+					}
+					timer := time.NewTimer(remaining)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
+				}
+				_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
+				return
+			}
+			if syntheticWaiting {
 				_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
 				return
 			}
@@ -110,6 +175,7 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 				last = current
 				haveLast = true
 			}
+			syntheticWaiting = false
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {

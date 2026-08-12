@@ -201,6 +201,168 @@ func TestRunGameCheckRetriesTransientFollowupFailure(t *testing.T) {
 	}
 }
 
+// A launch landing while upstream's status endpoint is still coming up must
+// not fail closed on the first read; the endpoint becomes usable moments later.
+func TestRunGameCheckRetriesFirstStatusReadDuringStartup(t *testing.T) {
+	stopped := false
+	var rejection string
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	checks := 0
+	upstream := gameCheckFunc(func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		if checks < 3 {
+			return syncthingconfig.GameCheckStatus{}, errors.New("status endpoint not ready")
+		}
+		return syncthingconfig.GameCheckStatus{Current: true}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, gameCheckAckMS, nil)
+	if !stopped || rejection != "" {
+		t.Fatalf("stopped = %t, rejection = %q after %d reads", stopped, rejection, checks)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Duration(gameCheckAckMS)*time.Millisecond {
+		t.Fatalf("initial reply took %s, want it inside ack_ms", elapsed)
+	}
+}
+
+func TestRunGameCheckFirstReadTimeoutStillRepliesInsideAck(t *testing.T) {
+	var rejection string
+	lifecycle := &fakeLifecycle{reject: func(_ string, reason string) error {
+		rejection = reason
+		return nil
+	}}
+	upstream := gameCheckFunc(func(ctx context.Context, _ []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.GameCheckStatus, error) {
+		<-ctx.Done()
+		return syncthingconfig.GameCheckStatus{}, ctx.Err()
+	})
+	started := time.Now()
+	runGameCheck(context.Background(), lifecycle, upstream, nil, "SELF",
+		life1.Event{LaunchID: "launch"}, 250, nil)
+	if rejection != "sync-status-unavailable" {
+		t.Fatalf("rejection = %q", rejection)
+	}
+	if elapsed := time.Since(started); elapsed >= 250*time.Millisecond {
+		t.Fatalf("initial error took %s, want it inside ack_ms", elapsed)
+	}
+}
+
+func TestRunGameCheckAcknowledgesSlowFirstProbeThenStops(t *testing.T) {
+	stopped := false
+	var rejection string
+	var firstReply time.Duration
+	started := time.Now()
+	lifecycle := &fakeLifecycle{
+		waiting: func(_ string, items int, bytes int64) error {
+			firstReply = time.Since(started)
+			if items != 1 || bytes != 0 {
+				t.Fatalf("waiting = %d, %d", items, bytes)
+			}
+			return nil
+		},
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	checks := 0
+	upstream := gameCheckFunc(func(ctx context.Context, _ []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		if checks == 1 {
+			<-ctx.Done()
+			return syncthingconfig.GameCheckStatus{}, ctx.Err()
+		}
+		return syncthingconfig.GameCheckStatus{Current: true}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, gameCheckAckMS, nil)
+	if !stopped || rejection != "" || checks != 2 {
+		t.Fatalf("stopped = %t, rejection = %q, checks = %d", stopped, rejection, checks)
+	}
+	if firstReply <= 0 || firstReply >= time.Duration(gameCheckAckMS)*time.Millisecond {
+		t.Fatalf("first reply took %s, want it inside ack_ms", firstReply)
+	}
+}
+
+func TestRunGameCheckSlowProbeStillFailsClosedOnFollowupError(t *testing.T) {
+	stopped := false
+	waiting := false
+	var rejection string
+	checks := 0
+	lifecycle := &fakeLifecycle{
+		waiting: func(string, int, int64) error {
+			waiting = true
+			return nil
+		},
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	upstream := gameCheckFunc(func(ctx context.Context, _ []syncthingconfig.ConfiguredFolder, _ string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		if checks == 1 {
+			<-ctx.Done()
+			return syncthingconfig.GameCheckStatus{}, ctx.Err()
+		}
+		return syncthingconfig.GameCheckStatus{}, errors.New("status endpoint down")
+	})
+	runGameCheck(context.Background(), lifecycle, upstream, nil, "SELF",
+		life1.Event{LaunchID: "launch"}, gameCheckAckMS, nil)
+	if !waiting || stopped || rejection != "sync-status-unavailable" || checks != 2 {
+		t.Fatalf("waiting = %t, stopped = %t, rejection = %q, checks = %d",
+			waiting, stopped, rejection, checks)
+	}
+}
+
+// Retrying must not turn a genuinely unavailable status into a launch.
+func TestRunGameCheckStillFailsClosedWhenStatusNeverArrives(t *testing.T) {
+	stopped := false
+	var rejection string
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	upstream := gameCheckFunc(func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+		return syncthingconfig.GameCheckStatus{}, errors.New("status endpoint down")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, gameCheckAckMS, nil)
+	if stopped || rejection != "sync-status-unavailable" {
+		t.Fatalf("stopped = %t, rejection = %q", stopped, rejection)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Duration(gameCheckAckMS)*time.Millisecond {
+		t.Fatalf("fail-closed took %s, want it inside ack_ms", elapsed)
+	}
+}
+
 type gameCheckFunc func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error)
 
 func (function gameCheckFunc) ReadGameCheckStatus(ctx context.Context, folders []syncthingconfig.ConfiguredFolder, selfDeviceID string) (syncthingconfig.GameCheckStatus, error) {
