@@ -20,6 +20,9 @@ import (
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
+// StopGrace mirrors the manifest's stop_grace_ms as an outer backstop only. The
+// stop ladder inside Process.Shutdown is self-bounded and finishes far sooner;
+// this ceiling exists so a wedged shutdown still returns to the caller.
 const StopGrace = 10 * time.Second
 
 type UpstreamProcess interface {
@@ -83,7 +86,7 @@ func (runner Runner) Run(ctx context.Context) error {
 	upstream, err := startProcess(ctx, syncthingconfig.ProcessOptions{
 		Binary: runner.Config.UpstreamBinary, ConfigDir: runner.Config.ConfigDir,
 		DataDir: runner.Config.DataDir, GUISocket: runner.Config.GUISocket,
-		Stdout: os.Stdout, Stderr: os.Stderr,
+		Stdout: os.Stdout, Stderr: os.Stderr, Logf: runner.Logf,
 	})
 	var foreignConflict syncthingconfig.Conflict
 	if err != nil && !errors.As(err, &foreignConflict) {

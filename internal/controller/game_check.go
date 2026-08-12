@@ -13,6 +13,14 @@ import (
 	"github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak/internal/uicontrol"
 )
 
+// firstStatusBudget bounds retries of the very first sync-status read, which
+// can transiently fail while upstream's REST surface is still coming up after a
+// service restart.
+const (
+	firstStatusBudget     = 1200 * time.Millisecond
+	firstStatusRetryDelay = 100 * time.Millisecond
+)
+
 func foldersForGameCheck(event life1.Event, inventory []cards.Card, folders []syncthingconfig.ConfiguredFolder, controls map[string]folderControlRecord) ([]syncthingconfig.ConfiguredFolder, error) {
 	var card *cards.Card
 	for index := range inventory {
@@ -76,6 +84,12 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 	}
 	var last syncthingconfig.GameCheckStatus
 	haveLast := false
+	// A launch that arrives while upstream's status endpoint is still coming up
+	// used to fail closed on the very first read error. Both an error reply and
+	// an ack timeout land the launch on Needs attention, so retrying inside a
+	// short budget can only improve the outcome — it never converts a real
+	// failure into a launch.
+	firstReadDeadline := time.Now().Add(firstStatusBudget)
 	for {
 		readTimeout := time.Duration(ackMS) * time.Millisecond
 		if haveLast && readTimeout < 2*time.Second {
@@ -92,6 +106,14 @@ func runGameCheck(ctx context.Context, lifecycle Lifecycle, upstream gameCheckUp
 				logf("check-before-stop needs attention: %v", err)
 			}
 			if !haveLast {
+				if time.Now().Before(firstReadDeadline) {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(firstStatusRetryDelay):
+					}
+					continue
+				}
 				_ = lifecycle.SendError(event.LaunchID, "sync-status-unavailable")
 				return
 			}

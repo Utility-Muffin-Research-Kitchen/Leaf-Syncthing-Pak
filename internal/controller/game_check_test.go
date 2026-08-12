@@ -201,6 +201,66 @@ func TestRunGameCheckRetriesTransientFollowupFailure(t *testing.T) {
 	}
 }
 
+// A launch landing while upstream's status endpoint is still coming up must
+// not fail closed on the first read; the endpoint becomes usable moments later.
+func TestRunGameCheckRetriesFirstStatusReadDuringStartup(t *testing.T) {
+	stopped := false
+	var rejection string
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	checks := 0
+	upstream := gameCheckFunc(func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+		checks++
+		if checks < 3 {
+			return syncthingconfig.GameCheckStatus{}, errors.New("status endpoint not ready")
+		}
+		return syncthingconfig.GameCheckStatus{Current: true}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, 250, nil)
+	if !stopped || rejection != "" {
+		t.Fatalf("stopped = %t, rejection = %q after %d reads", stopped, rejection, checks)
+	}
+}
+
+// Retrying must not turn a genuinely unavailable status into a launch.
+func TestRunGameCheckStillFailsClosedWhenStatusNeverArrives(t *testing.T) {
+	stopped := false
+	var rejection string
+	lifecycle := &fakeLifecycle{
+		stop: func(string) error {
+			stopped = true
+			return nil
+		},
+		reject: func(_ string, reason string) error {
+			rejection = reason
+			return nil
+		},
+	}
+	upstream := gameCheckFunc(func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error) {
+		return syncthingconfig.GameCheckStatus{}, errors.New("status endpoint down")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	runGameCheck(ctx, lifecycle, upstream, nil, "SELF", life1.Event{LaunchID: "launch"}, 250, nil)
+	if stopped || rejection != "sync-status-unavailable" {
+		t.Fatalf("stopped = %t, rejection = %q", stopped, rejection)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("fail-closed took %s, want it bounded by the first-status budget", elapsed)
+	}
+}
+
 type gameCheckFunc func(context.Context, []syncthingconfig.ConfiguredFolder, string) (syncthingconfig.GameCheckStatus, error)
 
 func (function gameCheckFunc) ReadGameCheckStatus(ctx context.Context, folders []syncthingconfig.ConfiguredFolder, selfDeviceID string) (syncthingconfig.GameCheckStatus, error) {
