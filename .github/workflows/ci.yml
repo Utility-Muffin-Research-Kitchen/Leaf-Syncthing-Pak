@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Utility-Muffin-Research-Kitchen/Catastrophe
-          ref: 91b44894334c407828ff65d80f0fb062044bf048
+          ref: a7a84230ba5b1aa1acf295d836d60a4f4347b69a
           path: Catastrophe
 
       - name: Set up Go
