@@ -36,6 +36,7 @@ func TestProxyRequestsAnUncompressedRootForBannerInjection(t *testing.T) {
 func TestProxyAllowListRejectsUnknownAndSmuggledTargets(t *testing.T) {
 	allowed := []string{
 		"/", "/assets/css/theme.css", "/rest/system/status",
+		"/vendor/fork-awesome/fonts/forkawesome-webfont.woff2?v=1.2.0",
 		"/rest/events?since=1", "/rest/db/status?folder=saves",
 		"/rest/db/completion?device=AAAA&folder=saves",
 	}
@@ -47,6 +48,7 @@ func TestProxyAllowListRejectsUnknownAndSmuggledTargets(t *testing.T) {
 	}
 	rejected := []string{
 		"/unknown", "/assets/css/unknown.css", "/rest/system/shutdown",
+		"/assets/css/theme.css?v=1.2.0", "/vendor/fork-awesome/fonts/forkawesome-webfont.woff2?v=2",
 		"/rest/events?since=one", "/rest/events?since=1&target=http://example.com",
 		"/rest/db/status?folder=a&folder=b", "//example.com/rest/system/status",
 		"/rest/%2e%2e/config",
@@ -56,6 +58,23 @@ func TestProxyAllowListRejectsUnknownAndSmuggledTargets(t *testing.T) {
 		if allowProxyURL(target) {
 			t.Errorf("expected rejected: %s", raw)
 		}
+	}
+}
+
+func TestNormalizeResponseAddsReadOnlyUIOverrides(t *testing.T) {
+	request := &http.Request{URL: &url.URL{Path: "/assets/css/overrides.css"}}
+	response := &http.Response{StatusCode: http.StatusOK, Request: request,
+		Header: http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:   io.NopCloser(strings.NewReader(".upstream { color: blue; }")),
+	}
+	if err := normalizeUpstreamResponse(response); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := io.ReadAll(response.Body)
+	if !strings.Contains(string(payload), ".upstream") ||
+		!strings.Contains(string(payload), `[ng-click^="addFolder("]`) ||
+		response.Header.Get("Content-Encoding") != "" || response.ContentLength != int64(len(payload)) {
+		t.Fatalf("read-only overrides missing: %q, %v", payload, response.Header)
 	}
 }
 

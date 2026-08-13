@@ -1999,6 +1999,7 @@ static void ls_show_gateway(ls_app *app) {
         int cursor_y = content.y + margin;
         char fingerprint[128];
         char trusted[64];
+        const char *displayed_url;
         uint32_t now = SDL_GetTicks();
 
         if (!theme || !large || !small) break;
@@ -2016,6 +2017,8 @@ static void ls_show_gateway(ls_app *app) {
         qr_x = screen_width - margin - qr_size;
         qr_y = content.y + (content.h - qr_size) / 2;
         text_width = qr_x - margin * 2;
+        displayed_url = app->status.gateway_pairing
+            ? app->status.gateway_qr_url : app->status.gateway_url;
         while (cat_poll_input(&event)) {
             if (!event.pressed) continue;
             if (event.button == CAT_BTN_B) {
@@ -2058,11 +2061,12 @@ static void ls_show_gateway(ls_app *app) {
                               theme->emphasis, CAT_ALIGN_LEFT);
         cursor_y += cat_measure_wrapped_text_height(
             small, "Status only—make changes on the handheld.", text_width) + margin;
-        cat_draw_text(small, "HTTPS address", margin, cursor_y, theme->hint);
+        cat_draw_text(small, app->status.gateway_pairing ? "Pairing address" : "HTTPS address",
+                      margin, cursor_y, theme->hint);
         cursor_y += TTF_FontHeight(small) + 2;
-        cat_draw_text_wrapped(small, app->status.gateway_url, margin, cursor_y,
+        cat_draw_text_wrapped(small, displayed_url, margin, cursor_y,
                               text_width, theme->text, CAT_ALIGN_LEFT);
-        cursor_y += cat_measure_wrapped_text_height(small, app->status.gateway_url, text_width) + margin;
+        cursor_y += cat_measure_wrapped_text_height(small, displayed_url, text_width) + margin;
         cat_draw_text(small, "Pairing PIN", margin, cursor_y, theme->hint);
         cursor_y += TTF_FontHeight(small) + 2;
         cat_draw_text(large, app->status.gateway_pairing ? app->status.gateway_pin : "Closed",

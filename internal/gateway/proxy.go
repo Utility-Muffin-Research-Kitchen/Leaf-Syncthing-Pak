@@ -13,9 +13,40 @@ import (
 )
 
 const (
-	maxProxyJSON   = 4 * 1024 * 1024
-	maxProxyHTML   = 4 * 1024 * 1024
-	readOnlyBanner = `<div id="leaf-read-only-banner" role="status" aria-live="polite" style="position:sticky;top:0;z-index:2147483647;padding:10px 16px;background:#f6c344;color:#161616;font:600 16px sans-serif;text-align:center">Read-only Leaf status view. Make changes on the handheld.</div>`
+	maxProxyJSON      = 4 * 1024 * 1024
+	maxProxyHTML      = 4 * 1024 * 1024
+	maxProxyCSS       = 1024 * 1024
+	readOnlyBanner    = `<div id="leaf-read-only-banner" role="status" aria-live="polite" style="position:sticky;top:0;z-index:2147483647;padding:10px 16px;background:#f6c344;color:#161616;font:600 16px sans-serif;text-align:center">Read-only Leaf status view. Make changes on the handheld.</div>`
+	readOnlyOverrides = `
+
+/* Leaf exposes Syncthing as a read-only status view. */
+[ng-click^="addDevice("],
+[ng-click^="addFolder("],
+[ng-click^="addFolderAndShare("],
+[ng-click^="advanced("],
+[ng-click^="clearErrors("],
+[ng-click^="dismissPendingDevice("],
+[ng-click^="dismissPendingFolder("],
+[ng-click^="editDeviceExisting("],
+[ng-click^="editFolderExisting("],
+[ng-click^="ignoreDevice("],
+[ng-click^="ignoreFolder("],
+[ng-click^="logout("],
+[ng-click^="rescanAllFolders("],
+[ng-click^="rescanFolder("],
+[ng-click^="restart("],
+[ng-click^="restoreVersions.show("],
+[ng-click^="revertOverrideConfirmationModal("],
+[ng-click^="setAllDevicesPause("],
+[ng-click^="setAllFoldersPause("],
+[ng-click^="setDevicePause("],
+[ng-click^="setFolderPause("],
+[ng-click^="shareFolderWithDevice("],
+[ng-click^="showSettings("],
+[ng-click^="shutdown("] {
+	display: none !important;
+}
+`
 )
 
 func (manager *Manager) newProxy() http.Handler {
@@ -86,6 +117,18 @@ func normalizeUpstreamResponse(response *http.Response) error {
 		response.Header.Set("Content-Length", strconv.Itoa(len(payload)))
 		response.Header.Del("Content-Encoding")
 	}
+	if response.Request != nil && response.Request.URL.Path == "/assets/css/overrides.css" && response.Body != nil {
+		payload, err := io.ReadAll(io.LimitReader(response.Body, maxProxyCSS+1))
+		_ = response.Body.Close()
+		if err != nil || len(payload) > maxProxyCSS {
+			return errors.New("upstream stylesheet exceeds gateway limit")
+		}
+		payload = append(payload, readOnlyOverrides...)
+		response.Body = io.NopCloser(bytes.NewReader(payload))
+		response.ContentLength = int64(len(payload))
+		response.Header.Set("Content-Length", strconv.Itoa(len(payload)))
+		response.Header.Del("Content-Encoding")
+	}
 	return nil
 }
 
@@ -142,7 +185,7 @@ func allowProxyURL(target *url.URL) bool {
 		return false
 	}
 	if _, allowed := staticPaths[target.Path]; allowed {
-		return target.RawQuery == ""
+		return target.RawQuery == "" || target.RawQuery == staticVersionQueries[target.Path]
 	}
 	query := target.Query()
 	exactNoQuery := map[string]struct{}{
@@ -166,6 +209,14 @@ func allowProxyURL(target *url.URL) bool {
 		return boundedQueries(query, "device", "folder")
 	}
 	return false
+}
+
+var staticVersionQueries = map[string]string{
+	"/vendor/fork-awesome/fonts/forkawesome-webfont.eot":   "v=1.2.0",
+	"/vendor/fork-awesome/fonts/forkawesome-webfont.woff2": "v=1.2.0",
+	"/vendor/fork-awesome/fonts/forkawesome-webfont.woff":  "v=1.2.0",
+	"/vendor/fork-awesome/fonts/forkawesome-webfont.ttf":   "v=1.2.0",
+	"/vendor/fork-awesome/fonts/forkawesome-webfont.svg":   "v=1.2.0",
 }
 
 func numericQueryOnly(query url.Values, names ...string) bool {

@@ -41,9 +41,10 @@ The allowlist contains:
 | Events | bounded event and disk-event queries |
 | Locale | the language-selection endpoint |
 
-The upstream UI may still render action controls, but every mutation stops at
-the gateway. Configuration changes remain available only through validated
-operations in the on-device UI.
+The gateway adds a pinned stylesheet override that hides the upstream UI's
+known mutation controls. This is only presentation: every mutation still stops
+at the gateway even if a new upstream control is missed. Configuration changes
+remain available only through validated operations in the on-device UI.
 
 ## Pairing and trust limits
 
