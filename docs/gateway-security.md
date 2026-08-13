@@ -21,7 +21,7 @@ proxy requests fail closed.
 ## Read-only upstream proxy
 
 Trusted browsers may send only GET or HEAD to an exact allowlist derived from
-the pinned Syncthing v2.1.2 web UI. The gateway removes client authorization,
+the pinned Syncthing v2.1.3 web UI. The gateway removes client authorization,
 API-key, cookie, Origin, and Referer headers before using its private upstream
 transport. It rejects request bodies, method overrides, unknown query shapes,
 and external or unknown redirects. Upstream cookies and CORS headers are

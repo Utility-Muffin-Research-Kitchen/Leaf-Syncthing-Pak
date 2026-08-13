@@ -22,7 +22,7 @@ const (
 	ControllerLock        = "controller.lock"
 	DefaultRetry          = time.Second
 	ServiceLeaseFD        = 3
-	PinnedUpstreamVersion = "v2.1.2"
+	PinnedUpstreamVersion = "v2.1.3"
 )
 
 var (

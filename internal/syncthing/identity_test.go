@@ -23,7 +23,7 @@ func TestEnsureIdentityGeneratesPromotesAndRevalidates(t *testing.T) {
 	binary := writeFakeSyncthing(t)
 	options := IdentityOptions{
 		Binary: binary, ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket: filepath.Join(root, "runtime", "syncthing-gui.sock"),
 	}
 	syncCalls := 0
@@ -87,7 +87,7 @@ func TestEnsureIdentityDiscardsOrphanStagingDirectories(t *testing.T) {
 	}
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
@@ -110,7 +110,7 @@ func TestEnsureIdentityConvergesAtBothGenerationFlushBoundaries(t *testing.T) {
 			t.Setenv("LEAF_SYNCTHING_FAKE_CALL_LOG", callLog)
 			options := IdentityOptions{
 				Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-				DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+				DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 				GUISocket: filepath.Join(root, "runtime", "syncthing-gui.sock"),
 			}
 			syncCall := 0
@@ -174,7 +174,7 @@ func TestEnsureIdentityMigratesOldConfigWithoutReplacingIdentity(t *testing.T) {
 	root := t.TempDir()
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
@@ -224,7 +224,7 @@ func TestEnsureIdentityMigratesOldConfigWithoutReplacingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if migrated.DeviceID != testDeviceID || migrated.UpstreamVersion != "v2.1.2" || migrated.ConfigVersion != 52 || syncCalls != 2 {
+	if migrated.DeviceID != testDeviceID || migrated.UpstreamVersion != "v2.1.3" || migrated.ConfigVersion != 52 || syncCalls != 2 {
 		t.Fatalf("migrated identity = %+v, sync calls = %d", migrated, syncCalls)
 	}
 	if current, err := os.ReadFile(configPath); err != nil || !strings.Contains(string(current), `future-field keep="yes"`) {
@@ -243,7 +243,7 @@ func TestEnsureIdentityMigratesOldConfigWithoutReplacingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updatedMarker.UpstreamVersion != "v2.1.2" || updatedMarker.ConfigVersion != 52 || updatedMarker.CertificateSHA != certificateSHA || updatedMarker.PrivateKeySHA != keySHA {
+	if updatedMarker.UpstreamVersion != "v2.1.3" || updatedMarker.ConfigVersion != 52 || updatedMarker.CertificateSHA != certificateSHA || updatedMarker.PrivateKeySHA != keySHA {
 		t.Fatalf("updated marker = %+v", updatedMarker)
 	}
 	for _, name := range []string{"config.migrate.tmp", "data.migrate.tmp"} {
@@ -267,7 +267,7 @@ func TestEnsureIdentityRefusesMigrationThatChangesIdentity(t *testing.T) {
 	root := t.TempDir()
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket: filepath.Join(root, "runtime", "syncthing-gui.sock"),
 	}
 	if _, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean}); err != nil {
@@ -321,7 +321,7 @@ func TestEnsureIdentityRejectsSymlinkedGeneratedFile(t *testing.T) {
 	root := t.TempDir()
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
@@ -351,7 +351,7 @@ func TestEnsureIdentityRefusesExistingFactoryConfig(t *testing.T) {
 	}
 	options := IdentityOptions{
 		Binary: writeFakeSyncthing(t), ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket:      filepath.Join(root, "runtime", "syncthing-gui.sock"),
 		SyncFilesystem: func(string) error { return nil },
 	}
@@ -397,7 +397,7 @@ func TestDeviceFactoryIdentityAndProcess(t *testing.T) {
 	guiSocket := filepath.Join(runtimeDir, "syncthing-gui.sock")
 	options := IdentityOptions{
 		Binary: binary, ConfigDir: filepath.Join(root, "config"),
-		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.2",
+		DataDir: filepath.Join(root, "data"), UpstreamVersion: "v2.1.3",
 		GUISocket: guiSocket,
 	}
 	generated, err := EnsureIdentity(context.Background(), options, RecoveryResult{State: RecoveryClean})

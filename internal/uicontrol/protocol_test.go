@@ -524,7 +524,7 @@ func shortTempDir(t *testing.T) string {
 func fixtureStatus() Status {
 	return Status{
 		Controller: "running",
-		Upstream:   UpstreamStatus{State: "running", Version: "v2.1.2", DeviceID: "FIXTURE-DEVICE"},
+		Upstream:   UpstreamStatus{State: "running", Version: "v2.1.3", DeviceID: "FIXTURE-DEVICE"},
 		Game:       GameStatus{}, Recovery: RecoveryStatus{State: "ready"},
 		Capabilities: []string{OperationGet, OperationEnrollCard},
 	}

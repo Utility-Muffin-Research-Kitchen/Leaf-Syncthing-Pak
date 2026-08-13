@@ -208,7 +208,7 @@ run_and_wait() {
     grep -F '"ok":true' <<<"$control_response" >/dev/null
     grep -F '"controller":"running"' <<<"$control_response" >/dev/null
     grep -F '"state":"running"' <<<"$control_response" >/dev/null
-    grep -F '"version":"v2.1.2"' <<<"$control_response" >/dev/null
+    grep -F '"version":"v2.1.3"' <<<"$control_response" >/dev/null
     grep -F '"capabilities":["status.get","card.enroll"]' <<<"$control_response" >/dev/null
     control_response="$("${ADB[@]}" shell "'$REMOTE_DIR/bin/jawaka-platformctl' --socket '$control_socket' request '{\"v\":1,\"id\":\"enroll-card\",\"op\":\"card.enroll\",\"args\":{\"source_id\":\"primary\"}}'" | tr -d '\r')"
     grep -F '"ok":true' <<<"$control_response" >/dev/null
@@ -418,9 +418,9 @@ downgrade_config_schema_fixture() {
     older=$((current - 1))
     "${ADB[@]}" shell "set -eu
         sed 's/version=\"$current\"/version=\"$older\"/' '$config_dir/config.xml' >'$config_dir/config.xml.schema-test'
-        sed -e 's/\"upstream_version\":\"v2.1.2\"/\"upstream_version\":\"v2.1.1\"/' -e 's/\"config_version\":$current/\"config_version\":$older/' '$config_dir/.leaf-generation-v1' >'$config_dir/.leaf-generation-v1.schema-test'
+        sed -e 's/\"upstream_version\":\"v2.1.3\"/\"upstream_version\":\"v2.1.2\"/' -e 's/\"config_version\":$current/\"config_version\":$older/' '$config_dir/.leaf-generation-v1' >'$config_dir/.leaf-generation-v1.schema-test'
         grep -q 'version=\"$older\"' '$config_dir/config.xml.schema-test'
-        grep -q '\"upstream_version\":\"v2.1.1\"' '$config_dir/.leaf-generation-v1.schema-test'
+        grep -q '\"upstream_version\":\"v2.1.2\"' '$config_dir/.leaf-generation-v1.schema-test'
         grep -q '\"config_version\":$older' '$config_dir/.leaf-generation-v1.schema-test'
         mv '$config_dir/config.xml.schema-test' '$config_dir/config.xml'
         mv '$config_dir/.leaf-generation-v1.schema-test' '$config_dir/.leaf-generation-v1'

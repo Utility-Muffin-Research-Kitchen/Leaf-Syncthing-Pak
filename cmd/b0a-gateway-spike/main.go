@@ -115,7 +115,7 @@ func run(opts options) error {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(leafStatus{
 				Variant:  "upstream-read-only-proxy",
-				Upstream: "syncthing-v2.1.2",
+				Upstream: "syncthing-v2.1.3",
 				ReadOnly: true,
 			})
 			return

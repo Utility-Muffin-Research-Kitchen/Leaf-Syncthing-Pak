@@ -38,7 +38,7 @@ int main(void) {
     const char *rich_payload =
         "{\"v\":1,\"id\":\"fixture-rich\",\"ok\":true,\"result\":{"
         "\"controller\":\"running\","
-        "\"upstream\":{\"state\":\"running\",\"version\":\"v2.1.2\",\"device_id\":\"LOCAL\"},"
+        "\"upstream\":{\"state\":\"running\",\"version\":\"v2.1.3\",\"device_id\":\"LOCAL\"},"
         "\"game\":{\"active\":false,\"launch_id\":\"\",\"source_id\":\"\"},"
         "\"recovery\":{\"state\":\"ready\",\"changed\":false},"
         "\"transfer\":{\"state\":\"syncing\",\"local_bytes\":10,\"global_bytes\":20,"
@@ -84,7 +84,7 @@ int main(void) {
     assert(ls_ui_parse_response(payload, size, "fixture-status", &status,
                                 error, sizeof(error)) == 0);
     assert(strcmp(status.controller, "running") == 0);
-    assert(strcmp(status.upstream_version, "v2.1.2") == 0);
+    assert(strcmp(status.upstream_version, "v2.1.3") == 0);
     assert(status.card_count == 1 && !status.cards[0].present);
     assert(status.folder_count == 1 && status.folders[0].paused);
     assert(status.folder_offer_count == 1 &&

@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v0.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Leaf Syncthing
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: Leaf-Syncthing-Pak
+
+      - name: Read release lock
+        id: release-lock
+        working-directory: Leaf-Syncthing-Pak
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          lock = json.load(open("release-lock.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key in ("pak_version", "floor_version", "min_leaf_version", "go_version",
+                          "catastrophe_commit", "contracts_commit", "mlp1_toolchain_image"):
+                  output.write(f"{key}={lock[key]}\n")
+          PY
+
+      - name: Check out pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: ${{ steps.release-lock.outputs.catastrophe_commit }}
+          path: Catastrophe
+
+      - name: Check out pinned service contracts
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/umrk-workspace
+          ref: ${{ steps.release-lock.outputs.contracts_commit }}
+          ssh-key: ${{ secrets.UMRK_WORKSPACE_DEPLOY_KEY }}
+          path: umrk-workspace
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.release-lock.outputs.go_version }}
+          cache-dependency-path: Leaf-Syncthing-Pak/go.sum
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
+      - name: Validate tag and metadata
+        working-directory: Leaf-Syncthing-Pak
+        env:
+          FLOOR_VERSION: ${{ steps.release-lock.outputs.floor_version }}
+          PAK_VERSION: ${{ steps.release-lock.outputs.pak_version }}
+        run: |
+          make release-metadata-check
+          case "$GITHUB_REF_NAME" in
+            "v$FLOOR_VERSION") printf 'kind=floor\n' >>"$GITHUB_ENV" ;;
+            "v$PAK_VERSION") printf 'kind=real\n' >>"$GITHUB_ENV" ;;
+            *) echo "tag does not match the locked floor or real version" >&2; exit 2 ;;
+          esac
+
+      - name: Test
+        working-directory: Leaf-Syncthing-Pak
+        run: |
+          make test
+          go vet ./...
+          go test -race ./internal/controller ./internal/syncthing ./internal/gateway
+
+      - name: Build exact MLP1 package
+        working-directory: Leaf-Syncthing-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.mlp1_toolchain_image }}
+        run: |
+          if [ "$kind" = floor ]; then
+            make package-floor-mlp1
+            artifact=build/mlp1/floor/Syncthing.mlp1.pak.zip
+          else
+            make package-mlp1
+            artifact=build/mlp1/Syncthing.mlp1.pak.zip
+          fi
+          python3 scripts/release-package-check.py --kind "$kind" --archive "$artifact"
+          printf 'artifact=%s\n' "$artifact" >>"$GITHUB_ENV"
+
+      - name: Create draft release
+        working-directory: Leaf-Syncthing-Pak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          checksum_file=build/mlp1/SHA256SUMS
+          notes=build/mlp1/release-notes.md
+          (cd "$(dirname "$artifact")" && sha256sum "$(basename "$artifact")") \
+            >"$checksum_file"
+          cp "docs/release-notes-$GITHUB_REF_NAME.md" "$notes"
+          printf '\n## SHA-256\n\n```\n' >>"$notes"
+          cat "$checksum_file" >>"$notes"
+          printf '```\n' >>"$notes"
+          if [ "$kind" = floor ]; then
+            title="Syncthing compatibility notice $GITHUB_REF_NAME"
+          else
+            title="Syncthing for Leaf $GITHUB_REF_NAME"
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "$artifact" \
+            "$checksum_file" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$title" \
+            --notes-file "$notes"

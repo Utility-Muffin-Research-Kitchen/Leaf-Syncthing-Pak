@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "org.umrk.syncthing",
+  "name": "Syncthing",
+  "summary": "Keep Leaf game saves synchronized with your other devices.",
+  "description": "Optional managed Syncthing service for Leaf with per-card safety, protected first sync, multi-device folder sharing, safe game-launch handoff, and a paired read-only status view.",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
+  "categories": ["tools", "network"],
+  "leaf": {
+    "packages": [
+      {
+        "platform": "mlp1",
+        "version": "0.1.0",
+        "min_leaf_version": "0.10.0",
+        "artifact_name": "Syncthing.mlp1.pak.zip",
+        "install_name": "Syncthing.pak",
+        "runtime_manifest_path": "pak.json",
+        "package_dir": "build/mlp1/package/Syncthing.pak",
+        "build_command": ["make", "package-platform", "PLATFORM=mlp1"]
+      }
+    ]
+  },
+  "compat": {
+    "nextui_pak_json": "pak.json"
+  },
+  "notes": {
+    "distribution": "Pak Rat optional app; never bundled in base Leaf.",
+    "target": "mlp1"
+  }
+}
