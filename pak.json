@@ -1,12 +1,13 @@
 {
   "id": "org.umrk.syncthing",
-  "name": "Syncthing (B4c development)",
+  "name": "Syncthing",
   "platform": "mlp1",
-  "pak_version": "0.0.0-b4c",
+  "pak_version": "0.1.0",
+  "min_leaf_version": "0.10.0",
   "min_jawaka_version": "0.5.5",
   "author": "Utility Muffin Research Kitchen",
   "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-Syncthing-Pak",
-  "description": "Non-production B4c package with guided multi-device folder sharing and safe pre-play sync checks.",
+  "description": "Managed save synchronization for Leaf with protected first sync and safe game-launch handoff.",
   "service": {
     "schema": 1,
     "id": "org.umrk.syncthing",

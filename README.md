@@ -4,42 +4,50 @@ Optional managed Syncthing service for Leaf. Distribution is through Pak Rat;
 this repository is excluded from Leaf's default payload, bootstrap set, and
 managed-app manifest.
 
-The product implementation through B3 is complete: a pure-Go resident
+The product implementation through B4c is complete: a pure-Go resident
 controller/gateway supervises the locked upstream Syncthing binary, while a
 separate C/Catastrophe foreground UI owns device interaction. B4a supplied the
-Jawaka service-pak mutation contract. B4b adds the remaining distribution
-input: an inert compatibility floor, a shared runtime Leaf-version check, and
-local end-to-end catalog qualification.
+Jawaka service-pak mutation contract, B4b supplied the compatibility floor and
+catalog proof, and B4c completed standard multi-device setup and safe pre-play
+checks.
 
-No production version or release minimum is chosen here. Source metadata stays
-on its development value. B4b candidates use the conspicuously disposable
-`0.0.1` floor, `0.0.2` real package, and `99.99.99` Leaf minimum only inside
-local build output. B5 is the sole owner of final version stamping, catalog
-publication, tags, and release assets.
+The first production Pak is `0.1.0`, gated to Leaf `0.10.0`. Older Leaf versions
+receive the inert `0.0.1` compatibility notice. `release-lock.json` is the
+version and build-input authority; `make release-metadata-check` rejects drift
+in the runtime or Pak Rat metadata. No tag, release, or catalog publication is
+automatic from source changes.
 
 ## Build and test
 
 ```sh
 make verify-upstream
 make test
+go vet ./...
+go test -race ./internal/controller ./internal/syncthing ./internal/gateway
 make controller-mlp1
 make ui-mlp1
 make package-mlp1
+python3 scripts/release-package-check.py \
+  --kind real --archive build/mlp1/Syncthing.mlp1.pak.zip
 ```
 
-The unstamped development package has no `min_leaf_version`, so local developer
-staging remains possible. A stamped candidate requires both values together:
+Build and verify the inert compatibility floor separately:
 
 ```sh
-make package-mlp1 PAK_VERSION=0.0.2 MIN_LEAF_VERSION=99.99.99
-make package-floor-mlp1 FLOOR_PAK_VERSION=0.0.1 MIN_LEAF_VERSION=99.99.99
+make package-floor-mlp1
+python3 scripts/release-package-check.py \
+  --kind floor --archive build/mlp1/floor/Syncthing.mlp1.pak.zip
+make release-catalog-candidate
 ```
+
+The catalog command writes only below `build/release-catalog`. It combines the
+locked real and inert-floor artifacts with the current production catalog and
+validates the result without modifying or publishing `leaf-docs`.
 
 The real package's `launch.sh` and `service.sh` share
 `lib/leaf-version-gate.sh`. An incompatible or unreadable installed Leaf
 version opens the inert notice from the foreground launcher and makes the
-service entry point refuse startup. A development package with no minimum is
-allowed. The floor has no service manifest, upstream binary, controller,
+service entry point refuse startup. The floor has no service manifest, upstream binary, controller,
 network behavior, or Syncthing data path.
 
 ## B4b qualification
@@ -75,18 +83,20 @@ is real-then-floor in descending order.
 
 ## Staging and licensing
 
-Leaf can stage an unstamped development package only through its explicit
-optional-app path:
+Leaf can stage the package only through its explicit optional-app path:
 
 ```sh
 make -C ../Leaf stage-app APP=Leaf-Syncthing-Pak DEVICE=mlp1 \
   REMOTE_SDCARD_PATH=/the/intended/card
 ```
 
-An uncached package build downloads the locked Syncthing release archive,
-signed checksums, source offer, and release key. Verification restricts initial
-and redirect hosts, checks the pinned signer and signature, then validates every
-locked digest before packaging.
+An uncached package build downloads the locked Syncthing release archive, signed
+checksums, source offer and detached signature, and release key. Verification
+restricts initial and redirect hosts, checks the pinned signer and signatures,
+validates every downloaded digest, and records the locked source offer in the
+package. See
+[`docs/upstream-maintenance.md`](docs/upstream-maintenance.md) for the bump and
+requalification procedure.
 
 UMRK controller, UI, gate, and packaging code are MIT licensed. The bundled
 upstream Syncthing binary remains MPL-2.0; both notices ship in the real pak.

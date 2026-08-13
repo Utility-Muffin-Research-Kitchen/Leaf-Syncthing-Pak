@@ -13,7 +13,7 @@ func TestDiagnosticsExportRedactsCredentialsAndPeerIdentity(t *testing.T) {
 	config := testConfig(t)
 	secret := "SUPER-SECRET-API-KEY-TOKEN-PASSWORD"
 	status := uicontrol.Status{
-		Controller: "running", Upstream: uicontrol.UpstreamStatus{State: "running", Version: "v2.1.2", DeviceID: secret},
+		Controller: "running", Upstream: uicontrol.UpstreamStatus{State: "running", Version: "v2.1.3", DeviceID: secret},
 		Game: uicontrol.GameStatus{LaunchID: secret, SourceID: secret}, Recovery: uicontrol.RecoveryStatus{State: "ready", PlanID: secret},
 		Gateway: &uicontrol.GatewayStatus{Open: true, URL: secret, PIN: secret, QRURL: secret, Fingerprint: secret, TrustedBrowsers: 1},
 		Cards:   []uicontrol.CardStatus{{ID: secret, IDSuffix: "ddeeff", Slot: "Primary", State: "enrolled"}},

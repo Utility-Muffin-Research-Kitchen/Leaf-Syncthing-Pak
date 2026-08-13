@@ -981,7 +981,7 @@ int ls_ui_summarize_status(const ls_ui_status *status, ls_ui_status_summary *sum
                          folder->remote_peer, folder->label);
             else if (folder->remote_peer[0] && strcmp(folder->remote_state, "unknown") == 0)
                 snprintf(summary->message, sizeof(summary->message),
-                         "Waiting for %s to report %s. Confirm it accepted and shared the folder.",
+                         "Waiting for %s to report %.120s. Confirm it accepted and shared the folder.",
                          folder->remote_peer, folder->label);
             else if (folder->remote_peer[0])
                 snprintf(summary->message, sizeof(summary->message), "%s needs attention for %s.",

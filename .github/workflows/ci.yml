@@ -17,11 +17,27 @@ jobs:
         with:
           path: Leaf-Syncthing-Pak
 
+      - name: Read release lock
+        id: release-lock
+        working-directory: Leaf-Syncthing-Pak
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          lock = json.load(open("release-lock.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"catastrophe_commit={lock['catastrophe_commit']}\n")
+              output.write(f"contracts_commit={lock['contracts_commit']}\n")
+              output.write(f"go_version={lock['go_version']}\n")
+              output.write(f"toolchain={lock['mlp1_toolchain_image']}\n")
+          PY
+
       - name: Check out the pinned service contracts
         uses: actions/checkout@v4
         with:
           repository: Utility-Muffin-Research-Kitchen/umrk-workspace
-          ref: 5ab17d82c122b481f15c835e6ff9a21829d45aa9
+          ref: ${{ steps.release-lock.outputs.contracts_commit }}
           ssh-key: ${{ secrets.UMRK_WORKSPACE_DEPLOY_KEY }}
           path: umrk-workspace
 
@@ -29,17 +45,33 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Utility-Muffin-Research-Kitchen/Catastrophe
-          ref: 49680a9cf1e87b8e14d970cb56c9aed6f6ff30c5
+          ref: ${{ steps.release-lock.outputs.catastrophe_commit }}
           path: Catastrophe
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: Leaf-Syncthing-Pak/go.mod
+          go-version: ${{ steps.release-lock.outputs.go_version }}
+          cache-dependency-path: Leaf-Syncthing-Pak/go.sum
 
       - name: Install native test dependencies
         run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
       - name: Test
-        run: go test ./...
+        run: |
+          make test
+          go vet ./...
+          go test -race ./internal/controller ./internal/syncthing ./internal/gateway
         working-directory: Leaf-Syncthing-Pak
+
+      - name: Build and verify MLP1 packages
+        working-directory: Leaf-Syncthing-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: |
+          make package-mlp1
+          python3 scripts/release-package-check.py \
+            --kind real --archive build/mlp1/Syncthing.mlp1.pak.zip
+          make package-floor-mlp1
+          python3 scripts/release-package-check.py \
+            --kind floor --archive build/mlp1/floor/Syncthing.mlp1.pak.zip

@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "version": "v2.1.3",
+  "published_at": "2026-08-05T13:06:38Z",
+  "source_repository": "https://github.com/syncthing/syncthing.git",
+  "source_tag": "refs/tags/v2.1.3",
+  "source_tag_object": "66afbbe2c4a957a5700d20bd16ac741a0a40d6f9",
+  "source_commit": "946e2b83a1f6c6ae119427c09e0a5802940b82ff",
+  "binary": {
+    "name": "syncthing-linux-arm64-v2.1.3.tar.gz",
+    "url": "https://github.com/syncthing/syncthing/releases/download/v2.1.3/syncthing-linux-arm64-v2.1.3.tar.gz",
+    "sha256": "a5c046965b590a8de2f8c8c16a0dbf9201d99600b0cafd604040232b603e4586",
+    "size": 10893415
+  },
+  "checksums": {
+    "name": "sha256sum.txt.asc",
+    "url": "https://github.com/syncthing/syncthing/releases/download/v2.1.3/sha256sum.txt.asc",
+    "sha256": "ca1573c54189856241a7275c9fadf7a6e8d24bed67ba412edb8e05e608721b55"
+  },
+  "release_key": {
+    "url": "https://syncthing.net/release-key.txt",
+    "sha256": "0b0f27199bcc60d3a5940ca515a8a37c374435a33674271e8992d462ec78f932",
+    "fingerprint": "FBA2E162F2F44657B38F0309E5665F9BD5970C47",
+    "signer": "Syncthing Release Management <release@syncthing.net>"
+  },
+  "allowed_download_hosts": [
+    "github.com",
+    "release-assets.githubusercontent.com",
+    "syncthing.net"
+  ],
+  "source_offer": {
+    "name": "syncthing-source-v2.1.3.tar.gz",
+    "url": "https://github.com/syncthing/syncthing/releases/download/v2.1.3/syncthing-source-v2.1.3.tar.gz",
+    "sha256": "f34bc1b3219e02ac1eca0b1446f582af8fe13f789da5f8c679ba9cac0396bf81",
+    "signature_url": "https://github.com/syncthing/syncthing/releases/download/v2.1.3/syncthing-source-v2.1.3.tar.gz.asc",
+    "signature_sha256": "91fa54357a307875944e7d71bc803ef0159b9dc852a94938665278a15ffab78d"
+  },
+  "license": {
+    "spdx": "MPL-2.0",
+    "url": "https://github.com/syncthing/syncthing/blob/v2.1.3/LICENSE"
+  }
+}

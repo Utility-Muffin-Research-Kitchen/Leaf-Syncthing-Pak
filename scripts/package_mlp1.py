@@ -14,8 +14,8 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOCK_PATH = ROOT / "upstream" / "syncthing-v2.1.2.lock.json"
-UPSTREAM_DIR = ROOT / "workdir" / "upstream" / "v2.1.2"
+LOCK_PATH = ROOT / "upstream" / "syncthing-v2.1.3.lock.json"
+UPSTREAM_DIR = ROOT / "workdir" / "upstream" / "v2.1.3"
 PACKAGE_DIR = ROOT / "build" / "mlp1" / "package" / "Syncthing.pak"
 ARCHIVE_PATH = ROOT / "build" / "mlp1" / "Syncthing.mlp1.pak.zip"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

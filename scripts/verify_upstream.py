@@ -63,8 +63,8 @@ def download(url: str, target: Path, expected_sha256: str,
 
 
 def run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=False, text=True, capture_output=True,
-                          **kwargs)
+    return subprocess.run(args, check=False, text=True, encoding="utf-8",
+                          errors="replace", capture_output=True, **kwargs)
 
 
 def verify_tag(lock: dict) -> None:
@@ -86,7 +86,8 @@ def verify_tag(lock: dict) -> None:
         raise RuntimeError(f"peeled source commit mismatch: {refs.get(f'{tag}^{{}}')!r}")
 
 
-def verify_signature(lock: dict, key_path: Path, checksums_path: Path) -> None:
+def verify_signatures(lock: dict, key_path: Path, checksums_path: Path,
+                      source_path: Path, source_signature_path: Path) -> None:
     expected_fingerprint = lock["release_key"]["fingerprint"]
     with tempfile.TemporaryDirectory(prefix="leaf-syncthing-gnupg-") as home:
         os.chmod(home, 0o700)
@@ -120,19 +121,28 @@ def verify_signature(lock: dict, key_path: Path, checksums_path: Path) -> None:
         # the retired co-signer, making gpg return nonzero despite the pinned
         # current signature above. The fingerprint-specific VALIDSIG is the
         # acceptance condition; an arbitrary good signature is insufficient.
+        source_verified = run([
+            "gpg", "--homedir", home, "--batch", "--status-fd", "1",
+            "--verify", str(source_signature_path), str(source_path),
+        ])
+        if valid_marker not in source_verified.stdout:
+            detail = (source_verified.stdout + "\n" + source_verified.stderr).strip()
+            raise RuntimeError(f"expected source signature is not valid:\n{detail}")
 
 
 def verify_checksum_entry(lock: dict, checksums_path: Path) -> None:
-    wanted_name = lock["binary"]["name"]
-    wanted_hash = lock["binary"]["sha256"]
-    pattern = re.compile(rf"^([0-9a-f]{{64}})  {re.escape(wanted_name)}$")
-    matches = [
-        match.group(1)
-        for line in checksums_path.read_text(encoding="utf-8").splitlines()
-        if (match := pattern.match(line))
-    ]
-    if matches != [wanted_hash]:
-        raise RuntimeError(f"signed checksum entry mismatch: {matches!r}")
+    lines = checksums_path.read_text(encoding="utf-8").splitlines()
+    for artifact in (lock["binary"], lock["source_offer"]):
+        pattern = re.compile(rf"^([0-9a-f]{{64}})  {re.escape(artifact['name'])}$")
+        matches = [
+            match.group(1)
+            for line in lines
+            if (match := pattern.match(line))
+        ]
+        if matches != [artifact["sha256"]]:
+            raise RuntimeError(
+                f"signed checksum entry mismatch for {artifact['name']}: {matches!r}"
+            )
 
 
 def verify_archive(lock: dict, archive: Path) -> None:
@@ -174,6 +184,8 @@ def main() -> int:
     binary_path = args.output / lock["binary"]["name"]
     checksums_path = args.output / lock["checksums"]["name"]
     key_path = args.output / "release-key.txt"
+    source_path = args.output / lock["source_offer"]["name"]
+    source_signature_path = args.output / (lock["source_offer"]["name"] + ".asc")
     redirects = {
         "binary": download(lock["binary"]["url"], binary_path,
                            lock["binary"]["sha256"], allowed_hosts),
@@ -181,9 +193,16 @@ def main() -> int:
                               lock["checksums"]["sha256"], allowed_hosts),
         "release_key": download(lock["release_key"]["url"], key_path,
                                 lock["release_key"]["sha256"], allowed_hosts),
+        "source": download(lock["source_offer"]["url"], source_path,
+                           lock["source_offer"]["sha256"], allowed_hosts),
+        "source_signature": download(
+            lock["source_offer"]["signature_url"], source_signature_path,
+            lock["source_offer"]["signature_sha256"], allowed_hosts,
+        ),
     }
     verify_tag(lock)
-    verify_signature(lock, key_path, checksums_path)
+    verify_signatures(lock, key_path, checksums_path,
+                      source_path, source_signature_path)
     verify_checksum_entry(lock, checksums_path)
     verify_archive(lock, binary_path)
 
@@ -193,6 +212,7 @@ def main() -> int:
         "source_commit": lock["source_commit"],
         "binary": binary_path.name,
         "sha256": sha256(binary_path),
+        "source_offer_sha256": sha256(source_path),
         "release_key_fingerprint": lock["release_key"]["fingerprint"],
         "redirect_hosts": redirects,
     }, indent=2, sort_keys=True))

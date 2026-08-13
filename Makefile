@@ -4,16 +4,23 @@ CC ?= cc
 PLATFORM ?= mlp1
 WORKSPACE_ROOT ?= $(abspath ..)
 CATASTROPHE_DIR ?= $(WORKSPACE_ROOT)/Catastrophe
+LEAF_DOCS_DIR ?= $(WORKSPACE_ROOT)/leaf-docs
 MLP1_TOOLCHAIN_IMAGE ?= ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain:local
+MLP1_CONTAINER_REPO ?= /workspace/$(notdir $(CURDIR))
 MLP1_UI := build/mlp1/bin/leaf-syncthing-ui
 MLP1_FLOOR_UI := build/mlp1/bin/leaf-syncthing-floor
+PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["pak_version"])')
+FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["floor_version"])')
+MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
+B4B_REAL_VERSION ?= 0.0.2
+B4B_MIN_LEAF_VERSION ?= 99.99.99
 
-.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 b4b-fixture b4b-local-smoke b4b-device-floor-smoke b4b-device-pre-gating-smoke b4b-device-transition-smoke test test-ui-control-c test-ui-client-c test-service-view-c test-version-gate clean
+.PHONY: verify-upstream gateway-mlp1 controller-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 b4b-fixture b4b-local-smoke b4b-device-floor-smoke b4b-device-pre-gating-smoke b4b-device-transition-smoke release-metadata-check release-catalog-candidate test test-ui-control-c test-ui-client-c test-service-view-c test-version-gate clean
 
 verify-upstream:
 	$(PYTHON) scripts/verify_upstream.py \
-		--lock upstream/syncthing-v2.1.2.lock.json \
-		--output workdir/upstream/v2.1.2
+		--lock upstream/syncthing-v2.1.3.lock.json \
+		--output workdir/upstream/v2.1.3
 
 gateway-mlp1:
 	@mkdir -p build/mlp1/bin
@@ -30,7 +37,7 @@ controller-mlp1:
 ui-mlp1:
 	docker run --rm \
 		-v "$(WORKSPACE_ROOT):/workspace" \
-		-w /workspace/Leaf-Syncthing-Pak \
+		-w "$(MLP1_CONTAINER_REPO)" \
 		"$(MLP1_TOOLCHAIN_IMAGE)" \
 		make -f ports/mlp1/Makefile BUILD_DIR=build/mlp1 CATASTROPHE_DIR=/workspace/Catastrophe
 
@@ -42,20 +49,19 @@ package-platform:
 
 package-mlp1: verify-upstream controller-mlp1 ui-mlp1
 	$(PYTHON) scripts/package_mlp1.py \
-		$(if $(PAK_VERSION),--pak-version "$(PAK_VERSION)") \
-		$(if $(MIN_LEAF_VERSION),--min-leaf-version "$(MIN_LEAF_VERSION)")
+		--pak-version "$(PAK_VERSION)" \
+		--min-leaf-version "$(MIN_LEAF_VERSION)"
 
 package-floor-mlp1: ui-mlp1
-	@test -n "$(MIN_LEAF_VERSION)" || { echo "MIN_LEAF_VERSION is required" >&2; exit 2; }
 	$(PYTHON) scripts/package_floor.py \
-		--pak-version "$(if $(FLOOR_PAK_VERSION),$(FLOOR_PAK_VERSION),0.0.1)" \
+		--pak-version "$(FLOOR_PAK_VERSION)" \
 		--min-leaf-version "$(MIN_LEAF_VERSION)"
 
 b4b-fixture:
 	$(PYTHON) scripts/build_b4b_fixture.py \
-		--floor-version "$(if $(FLOOR_PAK_VERSION),$(FLOOR_PAK_VERSION),0.0.1)" \
-		--real-version "$(if $(PAK_VERSION),$(PAK_VERSION),0.0.2)" \
-		--min-leaf-version "$(if $(MIN_LEAF_VERSION),$(MIN_LEAF_VERSION),99.99.99)"
+		--floor-version "0.0.1" \
+		--real-version "$(B4B_REAL_VERSION)" \
+		--min-leaf-version "$(B4B_MIN_LEAF_VERSION)"
 
 b4b-local-smoke:
 	bash scripts/b4b-local-smoke.sh
@@ -69,7 +75,20 @@ b4b-device-pre-gating-smoke: b4b-fixture
 b4b-device-transition-smoke:
 	bash scripts/adb-mlp1-b4b-transition-smoke.sh
 
-test:
+release-metadata-check:
+	$(PYTHON) scripts/release-metadata-check.py
+
+release-catalog-candidate:
+	$(PYTHON) scripts/release-catalog-candidate.py \
+		--catalog "$(LEAF_DOCS_DIR)/public/pakrat/v1/storefront.json" \
+		--real build/mlp1/Syncthing.mlp1.pak.zip \
+		--floor build/mlp1/floor/Syncthing.mlp1.pak.zip \
+		--output build/release-catalog/pakrat/v1/storefront.json
+	node "$(LEAF_DOCS_DIR)/scripts/validate-pakrat-catalog.mjs" \
+		--catalog build/release-catalog/pakrat/v1/storefront.json \
+		--previous-catalog "$(LEAF_DOCS_DIR)/public/pakrat/v1/storefront.json"
+
+test: release-metadata-check
 	$(GO) test ./...
 	$(MAKE) test-ui-control-c
 	$(MAKE) test-ui-client-c
