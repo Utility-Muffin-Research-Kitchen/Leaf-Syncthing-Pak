@@ -215,6 +215,13 @@ int main(void) {
         snprintf(status.folders[0].remote_state, sizeof(status.folders[0].remote_state), "unknown");
         assert(ls_ui_summarize_status(&status, &summary) == 0 &&
                strstr(summary.message, "accepted and shared") != NULL);
+        memset(status.folders[0].remote_peer, 'P', sizeof(status.folders[0].remote_peer) - 1);
+        status.folders[0].remote_peer[sizeof(status.folders[0].remote_peer) - 1] = '\0';
+        memset(status.folders[0].label, 'F', sizeof(status.folders[0].label) - 1);
+        status.folders[0].label[sizeof(status.folders[0].label) - 1] = '\0';
+        assert(ls_ui_summarize_status(&status, &summary) == 0 &&
+               strlen(summary.message) < sizeof(summary.message) &&
+               strstr(summary.message, "accepted and shared") != NULL);
 
         snprintf(status.controller, sizeof(status.controller), "stopped");
         assert(!ls_ui_guided_setup_complete(&status));
