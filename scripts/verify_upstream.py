@@ -63,8 +63,8 @@ def download(url: str, target: Path, expected_sha256: str,
 
 
 def run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=False, text=True, capture_output=True,
-                          **kwargs)
+    return subprocess.run(args, check=False, text=True, encoding="utf-8",
+                          errors="replace", capture_output=True, **kwargs)
 
 
 def verify_tag(lock: dict) -> None:

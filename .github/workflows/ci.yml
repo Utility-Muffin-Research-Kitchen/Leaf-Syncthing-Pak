@@ -52,6 +52,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ steps.release-lock.outputs.go_version }}
+          cache-dependency-path: Leaf-Syncthing-Pak/go.sum
 
       - name: Install native test dependencies
         run: sudo apt-get update && sudo apt-get install --yes libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
