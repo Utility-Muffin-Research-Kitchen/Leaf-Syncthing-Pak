@@ -2,7 +2,7 @@
   "id": "org.umrk.syncthing",
   "name": "Syncthing",
   "platform": "mlp1",
-  "pak_version": "0.1.0",
+  "pak_version": "0.1.1",
   "min_leaf_version": "0.10.0",
   "min_jawaka_version": "0.5.5",
   "author": "Utility Muffin Research Kitchen",

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "pak_version": "0.1.0",
+  "pak_version": "0.1.1",
   "floor_version": "0.0.1",
   "min_leaf_version": "0.10.0",
   "upstream_lock": "upstream/syncthing-v2.1.3.lock.json",
