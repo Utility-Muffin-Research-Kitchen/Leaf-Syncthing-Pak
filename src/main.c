@@ -1636,6 +1636,7 @@ static void ls_show_devices(ls_app *app, int return_when_configured) {
         options.initial_selected_index = focus < item_count ? focus : 0;
         options.visible_start_index = scroll;
         options.refresh_interval_ms = 1000;
+        options.help_text = "Recommended: on the other device, add Leaf using My device ID + QR, then share its existing Saves folder with Leaf. Return here to accept the Pending request. Add peer by ID is the manual fallback.";
         action = cat_options_list(&options, &result);
         focus = result.focused_index;
         scroll = result.visible_start_index;
@@ -1643,6 +1644,13 @@ static void ls_show_devices(ls_app *app, int return_when_configured) {
         if (result.action == CAT_ACTION_REFRESH) continue;
         if (result.action != CAT_ACTION_SELECTED) continue;
         if (focus == 0) {
+            ls_message(
+                "On the other device:\n\n"
+                "1. Add Leaf using this QR or device ID.\n"
+                "2. Edit the existing Saves folder, open Sharing, select Leaf, and save.\n\n"
+                "If it shows Disconnected (Unused), no folder has been shared with Leaf yet. "
+                "For a VPS or another off-LAN device, enable Network > Sync Anywhere first.\n\n"
+                "Then press B here. Select the Pending device and choose Accept.");
             ls_show_qr_value("My Syncthing Device", app->status.device_id);
         } else if (focus == 1) {
             ls_manual_add_peer(app);
@@ -1729,33 +1737,31 @@ static void ls_reset_summary(ls_app *app, char *message, size_t message_size) {
 }
 
 static void ls_reset_flow(ls_app *app, const char *action) {
-    const char *phrase;
+    const char *confirmation;
     const char *warning;
-    cat_keyboard_result confirmation = {0};
+    const char *execute_label;
     char summary[16384];
     if (strcmp(action, "index-only") == 0) {
-        phrase = "RESET INDEX";
+        confirmation = "RESET INDEX";
+        execute_label = "Reset index";
         warning = "Rebuild Syncthing's derived index? Configuration, device identity, snapshots, versions, Saves, States, and ROMs remain.";
     } else if (strcmp(action, "available-only") == 0) {
-        phrase = "RESET AVAILABLE STATE";
+        confirmation = "RESET AVAILABLE STATE";
+        execute_label = "Reset state";
         warning = "Reset only currently available Syncthing state? Any enrolled absent card keeps its snapshots and versions and will be named before execution.";
     } else {
-        phrase = "RESET SYNCTHING";
-        warning = "Reset all Syncthing state and create a new device identity? Every enrolled card must be present. Live Saves, States, and ROMs remain.";
+        confirmation = "RESET SYNCTHING";
+        execute_label = "Start fresh";
+        warning = "Restore a fresh Syncthing setup? This removes the identity, devices, folders, index, browser trust, snapshots, and version history. Every enrolled card must be present. Live Saves, States, ROMs, and card enrollment remain.";
     }
-    if (!ls_confirm(warning, "Continue")) return;
-    if (cat_keyboard("", phrase, CAT_KB_GENERAL, &confirmation) != CAT_OK ||
-        strcmp(confirmation.text, phrase) != 0) {
-        ls_message("The confirmation phrase did not match. Nothing was changed.");
-        return;
-    }
-    if (ls_ui_reset_prepare(app->control_socket, action, confirmation.text,
+    if (!ls_confirm(warning, "Review")) return;
+    if (ls_ui_reset_prepare(app->control_socket, action, confirmation,
                             &app->status, app->error, sizeof(app->error)) != 0) {
         ls_message(app->error);
         return;
     }
     ls_reset_summary(app, summary, sizeof(summary));
-    if (!ls_confirm(summary, "Execute")) return;
+    if (!ls_confirm(summary, execute_label)) return;
     if (ls_ctl1_action(app->daemon_socket, "stop", LS_SERVICE_ID,
                        app->error, sizeof(app->error)) != 0 ||
         ls_wait_service_stopped(app) != 0 ||
@@ -1763,9 +1769,13 @@ static void ls_reset_flow(ls_app *app, const char *action) {
         ls_message(app->error);
         return;
     }
-    ls_message(strcmp(action, "index-only") == 0
-        ? "The Syncthing index was reset. Leaf will rebuild it after restart."
-        : "The confirmed Syncthing state was reset. Leaf will generate a new Syncthing device identity after restart.");
+    if (strcmp(action, "index-only") == 0) {
+        ls_message("The Syncthing index was reset. Leaf will rebuild it after restart.");
+    } else if (strcmp(action, "full") == 0) {
+        ls_message("Fresh Syncthing setup restored. Leaf will generate a new device identity after restart. Live Saves, States, ROMs, and card enrollment were kept.");
+    } else {
+        ls_message("The available Syncthing state was reset. Leaf will generate a new device identity after restart. Absent-card history was kept.");
+    }
     if (ls_ctl1_action(app->daemon_socket, "run", LS_SERVICE_ID,
                        app->error, sizeof(app->error)) != 0) ls_message(app->error);
 }
@@ -1775,7 +1785,7 @@ static void ls_show_recovery(ls_app *app) {
     for (;;) {
         cat_options_item items[3] = {
             {.label = "Reset index only", .type = CAT_OPT_CLICKABLE},
-            {.label = "Reset Syncthing", .type = CAT_OPT_CLICKABLE},
+            {.label = "Restore fresh setup", .type = CAT_OPT_CLICKABLE},
             {.label = "Reset available state only", .type = CAT_OPT_CLICKABLE},
         };
         cat_footer_item footer[] = {{.button = CAT_BTN_B, .label = "Back"},
@@ -2178,7 +2188,7 @@ static void ls_guided_setup(ls_app *app) {
 
     configured_peers = ls_configured_peer_count(&app->status);
     if (configured_peers == 0) {
-        ls_message("Connect a device: show Leaf's device ID or QR, add a peer by ID, or review a pending device. Setup continues automatically after the device is accepted.");
+        ls_message("Connect without typing on Leaf: open My device ID + QR. On the other device, add Leaf and share its existing Saves folder with Leaf. Then return to Devices and accept the Pending request. For a VPS or another off-LAN device, enable Network > Sync Anywhere first. Add peer by ID is the manual fallback.");
         ls_show_devices(app, 1);
         ls_refresh(app);
         configured_peers = ls_configured_peer_count(&app->status);
