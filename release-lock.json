@@ -4,7 +4,7 @@
   "floor_version": "0.0.1",
   "min_leaf_version": "0.10.0",
   "upstream_lock": "upstream/syncthing-v2.1.3.lock.json",
-  "catastrophe_commit": "49680a9cf1e87b8e14d970cb56c9aed6f6ff30c5",
+  "catastrophe_commit": "b142403d2c666dab4851d5f8d44002474f016b56",
   "contracts_commit": "5ab17d82c122b481f15c835e6ff9a21829d45aa9",
   "go_version": "1.22.12",
   "mlp1_toolchain_image": "ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain@sha256:66aac16fb8b07e663c9b4d66970f272df195a6eba98dfad8286eabbaa617faf9"
